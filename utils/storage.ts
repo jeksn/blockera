@@ -46,14 +46,35 @@ export async function addTempAllowedSite(site: string, minutes: number): Promise
 }
 
 export async function isSiteTempAllowed(site: string): Promise<boolean> {
-  const sites = await getTempAllowedSites();
-  const now = Date.now();
-  
-  // Clean up expired entries
-  const valid = sites.filter(s => s.allowedUntil > now);
-  if (valid.length !== sites.length) {
-    await browser.storage.local.set({ [TEMP_ALLOWED_KEY]: valid });
+  try {
+    const sites = await getTempAllowedSites();
+    const now = Date.now();
+    
+    // Clean up expired entries
+    const valid = sites.filter(s => s.allowedUntil > now);
+    if (valid.length !== sites.length) {
+      await browser.storage.local.set({ [TEMP_ALLOWED_KEY]: valid });
+    }
+    
+    return valid.some(s => s.site === site);
+  } catch (error) {
+    console.error('Error checking temporary allowance:', error);
+    return false;
   }
-  
-  return valid.some(s => s.site === site);
+}
+
+// Clean up expired temporary allowances (call this periodically)
+export async function cleanupExpiredTempAllowed(): Promise<void> {
+  try {
+    const sites = await getTempAllowedSites();
+    const now = Date.now();
+    const valid = sites.filter(s => s.allowedUntil > now);
+    
+    if (valid.length !== sites.length) {
+      await browser.storage.local.set({ [TEMP_ALLOWED_KEY]: valid });
+      console.log(`Cleaned up ${sites.length - valid.length} expired temporary allowances`);
+    }
+  } catch (error) {
+    console.error('Error cleaning up expired temporary allowances:', error);
+  }
 }

@@ -53,65 +53,71 @@ export default defineBackground(() => {
     return false;
   });
 
+  // Helper function to inject content script and send message
+  const injectAndSendMessage = async (tabId: number, message: any, retries = 3) => {
+    for (let i = 0; i < retries; i++) {
+      try {
+        await browser.tabs.sendMessage(tabId, message);
+        return true;
+      } catch (error) {
+        if (i === retries - 1) {
+          console.log('Injecting content script for tab:', tabId);
+          try {
+            await browser.scripting.executeScript({
+              target: { tabId },
+              files: ['/content-scripts/content.js']
+            });
+            // Wait a bit for the script to initialize
+            await new Promise(resolve => setTimeout(resolve, 200));
+            await browser.tabs.sendMessage(tabId, message);
+            return true;
+          } catch (injectError) {
+            console.error('Failed to inject content script:', injectError);
+            return false;
+          }
+        } else {
+          // Wait before retrying
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+      }
+    }
+    return false;
+  };
+
   // Listen for navigation to check against blocked sites
   browser.webNavigation.onCompleted.addListener(async (details) => {
     if (details.frameId !== 0) return;
 
-    const blockedSites = await getBlockedSites();
-    if (blockedSites.length === 0) return;
+    try {
+      const blockedSites = await getBlockedSites();
+      if (blockedSites.length === 0) return;
 
-    const url = new URL(details.url);
-    const hostname = url.hostname.replace(/^www\./, '');
-    console.log('Navigation to:', hostname, 'blocked sites:', blockedSites);
+      const url = new URL(details.url);
+      const hostname = url.hostname.replace(/^www\./, '');
+      console.log('Navigation to:', hostname);
 
-    // Check if this site is temporarily allowed
-    const isTempAllowed = await isSiteTempAllowed(hostname);
-    console.log('Is temp allowed:', isTempAllowed);
-    
-    if (isTempAllowed) {
-      console.log(`${hostname} is temporarily allowed, showing timer`);
+      // Check if this site is temporarily allowed
+      const isTempAllowed = await isSiteTempAllowed(hostname);
       
-      // Send message to content script to show timer
-      browser.tabs.sendMessage(details.tabId, { 
-        type: 'SHOW_TIMER', 
-        site: hostname 
-      }).catch(() => {
-        // Content script may not be loaded, inject it
-        browser.scripting.executeScript({
-          target: { tabId: details.tabId },
-          files: ['/content-scripts/content.js']
-        }).then(() => {
-          setTimeout(() => {
-            browser.tabs.sendMessage(details.tabId, { 
-              type: 'SHOW_TIMER', 
-              site: hostname 
-            }).catch(console.error);
-          }, 100);
-        }).catch(console.error);
-      });
-      
-      return;
-    }
+      if (isTempAllowed) {
+        console.log(`${hostname} is temporarily allowed, showing timer`);
+        await injectAndSendMessage(details.tabId, { 
+          type: 'SHOW_TIMER', 
+          site: hostname 
+        });
+        return;
+      }
 
-    const isBlocked = blockedSites.some((site: string) =>
-      hostname === site || hostname.endsWith(`.${site}`)
-    );
+      const isBlocked = blockedSites.some((site: string) =>
+        hostname === site || hostname.endsWith(`.${site}`)
+      );
 
-    if (isBlocked) {
-      console.log(`${hostname} is blocked, showing overlay`);
-      // Send message to content script
-      browser.tabs.sendMessage(details.tabId, { type: 'BLOCK_SITE' }).catch(() => {
-        // Content script may not be loaded, inject it
-        browser.scripting.executeScript({
-          target: { tabId: details.tabId },
-          files: ['/content-scripts/content.js']
-        }).then(() => {
-          // Retry sending message after injection
-          setTimeout(() => {
-            browser.tabs.sendMessage(details.tabId, { type: 'BLOCK_SITE' }).catch(console.error);
-          }, 100);
-        }).catch(console.error);
-      });
+      if (isBlocked) {
+        console.log(`${hostname} is blocked, showing overlay`);
+        await injectAndSendMessage(details.tabId, { type: 'BLOCK_SITE' });
+      }
+    } catch (error) {
+      console.error('Error in webNavigation handler:', error);
     }
   });
 });
