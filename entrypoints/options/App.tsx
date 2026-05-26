@@ -64,7 +64,7 @@ function App() {
               <Shield className="h-5 w-5 text-primary" />
             </div>
             <div>
-              <h1 className="text-lg font-semibold leading-none">Annoime</h1>
+              <h1 className="text-lg font-semibold leading-none">Blockera</h1>
               <p className="text-xs text-muted-foreground mt-1">Site Blocker Settings</p>
             </div>
           </div>
@@ -89,7 +89,7 @@ function App() {
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground space-y-3">
                 <p>
-                  Annoime helps you stay focused by blocking distracting websites.
+                  Blockera helps you stay focused by blocking distracting websites.
                 </p>
                 <Separator />
                 <div className="space-y-2">

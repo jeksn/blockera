@@ -66,7 +66,7 @@ function App() {
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <Shield className="h-5 w-5 text-primary" />
-              <h2 className="text-lg font-semibold">Settings</h2>
+              <h2 className="text-lg font-semibold">Blockera</h2>
             </div>
             <Button
               variant="ghost"
@@ -178,7 +178,7 @@ function App() {
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2">
             <Shield className="h-5 w-5 text-primary" />
-            <CardTitle className="text-lg">Annoime</CardTitle>
+            <CardTitle className="text-lg">Blockera</CardTitle>
           </div>
           <CardDescription>Stay focused, block distractions</CardDescription>
         </CardHeader>
