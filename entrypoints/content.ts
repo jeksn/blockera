@@ -164,7 +164,6 @@ function showBlurOverlay(currentTimeout: TimeoutOption) {
       currentURL: window.location.href,
       userAgent: navigator.userAgent.substring(0, 50),
       hasReact: !!(window.React || window.ReactDOM),
-      hasJQuery: !!(window.jQuery || window.$),
       documentReady: document.readyState
     }
   });
@@ -402,11 +401,11 @@ function showBlurOverlay(currentTimeout: TimeoutOption) {
     }
   }, 100);
 
-  let selectedTimeout: TimeoutOption = 0;
+  let selectedTimeout: TimeoutOption = defaultSelection;
 
   // Wait a moment for the DOM to be fully processed
   setTimeout(() => {
-    console.log('Setting up event listeners for overlay buttons');
+    console.log('Setting up event listeners for overlay buttons, default:', defaultSelection);
     
     // Setup timeout button listeners
     const timeoutButtons = overlay.querySelectorAll('.annoime-timeout-btn');
