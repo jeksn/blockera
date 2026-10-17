@@ -1,23 +1,22 @@
 import { useEffect, useState } from "react";
-import { Shield, Globe, Settings, Lock } from "lucide-react";
+import { Shield, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { getGroups, getTodayTotals, type BlockGroup } from "@/utils/storage";
+import { getGroups, getTodayTotals } from "@/utils/storage";
 import "@/assets/tailwind.css";
 
 function App() {
-  const [groups, setGroups] = useState<BlockGroup[]>([]);
-  const [today, setToday] = useState<{ seconds: number; attempts: number } | null>(
-    null
-  );
+  const [today, setToday] = useState<{ seconds: number; attempts: number } | null>(null);
+  const [totals, setTotals] = useState<{ sites: number; groups: number } | null>(null);
 
   useEffect(() => {
-    getGroups().then(setGroups);
     getTodayTotals().then(setToday);
+    getGroups().then((groups) =>
+      setTotals({
+        sites: groups.reduce((sum, g) => sum + g.sites.length, 0),
+        groups: groups.length,
+      })
+    );
   }, []);
-
-  const totalSites = groups.reduce((sum, g) => sum + g.sites.length, 0);
 
   const openSettings = () => {
     browser.runtime.openOptionsPage();
@@ -25,65 +24,47 @@ function App() {
   };
 
   return (
-    <div className="w-[320px] p-4 bg-background">
-      <Card>
-        <CardHeader className="pb-3">
-          <div className="flex items-center gap-2">
-            <Shield className="h-5 w-5 text-primary" />
-            <CardTitle className="text-lg">Blockera</CardTitle>
-          </div>
-          <CardDescription>Stay focused, block distractions</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <Button onClick={openSettings} className="w-full gap-2">
-            <Settings className="h-4 w-4" />
-            Open settings
-          </Button>
-
-          {groups.length > 0 ? (
-            <div className="space-y-1">
-              {groups.map((group) => (
-                <div
-                  key={group.id}
-                  className="flex items-center justify-between p-2 rounded-md bg-muted/50"
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    {group.allowOverride ? (
-                      <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    ) : (
-                      <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    )}
-                    <span className="text-sm truncate">{group.name}</span>
-                  </div>
-                  <Badge variant="secondary" className="text-xs shrink-0">
-                    {group.sites.length} {group.sites.length === 1 ? "site" : "sites"}
-                  </Badge>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground text-center py-2">
-              No block groups yet — add one in settings
-            </p>
-          )}
-
-          {today && (today.seconds > 0 || today.attempts > 0) && (
-            <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/50 text-sm">
-              <span>
-                Today: {Math.round(today.seconds / 60)} min on blocked sites
-              </span>
-              <Badge variant="outline" className="text-xs shrink-0">
-                {today.attempts} blocks
-              </Badge>
-            </div>
-          )}
-
-          <p className="text-[11px] text-muted-foreground text-center">
-            {totalSites} {totalSites === 1 ? "site" : "sites"} blocked in {groups.length}{" "}
-            {groups.length === 1 ? "group" : "groups"}
+    <div className="w-[280px] p-4 bg-background space-y-4">
+      <div className="flex items-center gap-2.5">
+        <Shield className="h-6 w-6 text-primary shrink-0" />
+        <div>
+          <h2 className="text-base font-semibold leading-none">Blockera</h2>
+          <p className="text-xs text-muted-foreground mt-1">
+            Stay focused, block distractions
           </p>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
+
+      <Button onClick={openSettings} className="w-full gap-2">
+        <Settings className="h-4 w-4" />
+        Open settings
+      </Button>
+
+      <div className="grid grid-cols-2 gap-3 rounded-lg border p-3">
+        <div>
+          <p className="text-xl font-semibold leading-tight">
+            {today ? Math.round(today.seconds / 60) : "–"}
+          </p>
+          <p className="text-[11px] text-muted-foreground leading-tight">
+            min on blocked sites today
+          </p>
+        </div>
+        <div>
+          <p className="text-xl font-semibold leading-tight">
+            {today ? today.attempts : "–"}
+          </p>
+          <p className="text-[11px] text-muted-foreground leading-tight">
+            blocks shown today
+          </p>
+        </div>
+      </div>
+
+      {totals && (
+        <p className="text-[11px] text-muted-foreground text-center">
+          {totals.sites} {totals.sites === 1 ? "site" : "sites"} in{" "}
+          {totals.groups} {totals.groups === 1 ? "group" : "groups"}
+        </p>
+      )}
     </div>
   );
 }
