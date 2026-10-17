@@ -119,7 +119,7 @@ function App() {
 function Settings() {
   const [groups, setGroups] = useState<BlockGroup[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [showSecurity, setShowSecurity] = useState(false);
+  const [view, setView] = useState<'home' | 'group' | 'security'>('home');
   const [hasPassword, setHasPassword] = useState(false);
   const [newSites, setNewSites] = useState<Record<string, string>>({});
 
@@ -144,7 +144,7 @@ function Settings() {
     const group = createGroup(`Group ${groups.length + 1}`);
     persist([...groups, group]);
     setSelectedId(group.id);
-    setShowSecurity(false);
+    setView('group');
   };
 
   const deleteGroup = (id: string) => {
@@ -197,13 +197,20 @@ function Settings() {
           {/* Sidebar */}
           <aside className="space-y-1">
             <button
-              className={`w-full flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
-                showSecurity ? "bg-secondary" : "hover:bg-muted/60"
+              className={`w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
+                view === 'home' ? 'bg-secondary' : 'hover:bg-muted/60'
               }`}
-              onClick={() => {
-                setShowSecurity(true);
-                setSelectedId(null);
-              }}
+              onClick={() => setView('home')}
+            >
+              <Shield className="h-4 w-4 text-muted-foreground" />
+              Home
+            </button>
+
+            <button
+              className={`w-full flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
+                view === 'security' ? 'bg-secondary' : 'hover:bg-muted/60'
+              }`}
+              onClick={() => setView('security')}
             >
               <span className="flex items-center gap-2">
                 {hasPassword ? (
@@ -222,13 +229,13 @@ function Settings() {
               <button
                 key={group.id}
                 className={`w-full flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
-                  !showSecurity && selectedId === group.id
-                    ? "bg-secondary"
-                    : "hover:bg-muted/60"
+                  view === 'group' && selectedId === group.id
+                    ? 'bg-secondary'
+                    : 'hover:bg-muted/60'
                 }`}
                 onClick={() => {
                   setSelectedId(group.id);
-                  setShowSecurity(false);
+                  setView('group');
                 }}
               >
                 <span className="flex items-center gap-2 min-w-0">
@@ -257,11 +264,13 @@ function Settings() {
 
           {/* Main panel */}
           <div>
-            {showSecurity ? (
+            {view === 'security' ? (
               <SecurityPanel
                 hasPassword={hasPassword}
                 onPasswordChange={setHasPassword}
               />
+            ) : view === 'home' ? (
+              <Landing onAddGroup={addGroup} groupCount={groups.length} />
             ) : selectedGroup ? (
               <GroupEditor
                 group={selectedGroup}
@@ -284,6 +293,131 @@ function Settings() {
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+function Landing({
+  onAddGroup,
+  groupCount,
+}: {
+  onAddGroup: () => void;
+  groupCount: number;
+}) {
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <Card>
+        <CardHeader className="space-y-2">
+          <div className="flex items-center gap-2">
+            <Shield className="h-6 w-6 text-primary" />
+            <CardTitle className="text-2xl">Blockera</CardTitle>
+          </div>
+          <CardDescription className="text-base leading-relaxed">
+            A distraction blocker you set up while you're clear-headed, so
+            you don't have to win an argument with yourself at 11pm.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Sites you block are covered by a full-screen blur with a "Stay
+            Focused" screen. Depending on your rules, you can dismiss it for a
+            fixed time — with a countdown timer that brings the screen back
+            when it expires — give yourself a daily time budget, or lock the
+            site behind a screen with no way out at all.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Clock className="h-5 w-5" />
+            How to use it
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm leading-relaxed">
+          <p>
+            <span className="font-medium">1. Create a group</span> for a
+            category of distraction — Social, Video, News, whatever pulls at
+            you.
+          </p>
+          <p>
+            <span className="font-medium">2. Add sites.</span> A site matches
+            its domain and all subdomains.
+          </p>
+          <p>
+            <span className="font-medium">3. Pick the rules.</span> Allow
+            temporary access with a countdown, cap it with a daily limit that
+            locks the site until midnight once it's spent, or choose always
+            block for sites you never want an excuse to open.
+          </p>
+          {groupCount === 0 && (
+            <Button onClick={onAddGroup} className="gap-2">
+              <Plus className="h-4 w-4" />
+              Add your first group
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Timer className="h-5 w-5" />
+            Why it works
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Blockera can't physically stop you from doing anything. What it
+            does is put a pause and a conscious decision between impulse and
+            action — you have to actively choose to dismiss the block screen,
+            every single time. That pause is usually enough. The point is
+            friction, not force.
+          </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Lock className="h-5 w-5" />
+            Personal responsibility — read this
+          </CardTitle>
+          <CardDescription>
+            Blockera is a self-commitment tool. It's a promise you make to
+            yourself, not a wall.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-3 text-sm leading-relaxed">
+          <p>
+            It is deliberately bypassable by anyone determined: the extension
+            can be disabled or removed from chrome://extensions in seconds,
+            and it only covers this browser. Other browsers, other devices,
+            and other user accounts are not covered.
+          </p>
+          <p>
+            The settings password is a speed bump against a moment of
+            weakness, not real security. Anyone with access to this device can
+            remove it by reinstalling the extension.
+          </p>
+          <p>
+            Blockera is not parental control software, not security software,
+            and not a substitute for professional help. If your use of certain
+            sites feels compulsive, or is harming your work, sleep, or
+            relationships, please consider talking to someone qualified.
+          </p>
+          <p className="text-muted-foreground">
+            Your data stays with you: block lists sync through your browser's
+            own sync feature; allowances, daily usage, and the password never
+            leave this device. Blockera has no servers and collects nothing.
+          </p>
+          <p className="text-muted-foreground">
+            Provided as-is, with no warranty. How you use it — and whether it
+            works — is up to you.
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

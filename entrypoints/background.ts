@@ -191,7 +191,12 @@ export default defineBackground(() => {
   browser.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
 
   // Purge expired temporary allowances and stale usage when the browser
-  // or extension starts.
+  // or extension starts; open the landing page on first install.
   browser.runtime.onStartup.addListener(cleanupExpiredTempAllowed);
-  browser.runtime.onInstalled.addListener(cleanupExpiredTempAllowed);
+  browser.runtime.onInstalled.addListener((details) => {
+    cleanupExpiredTempAllowed();
+    if (details.reason === 'install') {
+      browser.runtime.openOptionsPage();
+    }
+  });
 });
