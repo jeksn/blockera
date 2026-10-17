@@ -28,11 +28,18 @@ overlay returns when it expires.
 
 ## Settings
 
-All configuration lives in the full-page settings (popup → "Open settings").
-The popup itself only shows a summary of your groups.
+All configuration lives in the full-page settings (popup → "Open settings"):
+groups are listed in a sidebar, each opening its own editor. The popup
+itself only shows a summary of your groups.
+
+Optionally set a **settings password** (Security section). When set,
+opening the settings page requires it. There is no in-app reset — if you
+forget the password, remove and reinstall the extension, which wipes all
+settings. Note that this only locks Blockera's own UI; the extension can
+still be disabled from chrome://extensions.
 
 Settings sync across browsers via `chrome.storage.sync`; temporary
-allowances and daily usage are stored locally per browser.
+allowances, daily usage, and the password are stored locally per browser.
 
 ## Development
 

@@ -3,6 +3,7 @@ import { browser } from 'wxt/browser';
 const GROUPS_KEY = 'blockGroups';
 const TEMP_ALLOWED_KEY = 'tempAllowed';
 const USAGE_KEY = 'groupUsage';
+const PASSWORD_KEY = 'settingsPassword';
 
 // Legacy keys (pre-groups storage), used for migration only.
 const LEGACY_BLOCKED_SITES_KEY = 'blockedSites';
@@ -206,4 +207,46 @@ export function createGroup(name: string): BlockGroup {
     dailyBudgetMinutes: 0,
     allowOverride: true,
   };
+}
+
+export interface PasswordSetting {
+  /** Random per-install hex salt. */
+  salt: string;
+  /** SHA-256 of `${salt}:${password}` as hex. */
+  hash: string;
+}
+
+export async function getPasswordSetting(): Promise<PasswordSetting | null> {
+  const result = await browser.storage.local.get(PASSWORD_KEY);
+  return (result[PASSWORD_KEY] as PasswordSetting) || null;
+}
+
+export async function savePasswordSetting(setting: PasswordSetting): Promise<void> {
+  await browser.storage.local.set({ [PASSWORD_KEY]: setting });
+}
+
+export async function clearPasswordSetting(): Promise<void> {
+  await browser.storage.local.remove(PASSWORD_KEY);
+}
+
+export async function hashPassword(password: string, salt: string): Promise<string> {
+  const data = new TextEncoder().encode(`${salt}:${password}`);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export function randomSalt(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+export async function verifyPassword(password: string): Promise<boolean> {
+  const setting = await getPasswordSetting();
+  if (!setting) return true;
+  const hash = await hashPassword(password, setting.salt);
+  return hash === setting.hash;
 }
