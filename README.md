@@ -52,3 +52,6 @@ pnpm zip        # store-ready zip
 
 Load the built extension via `chrome://extensions` → Developer mode →
 Load unpacked → select `.output/chrome-mv3`.
+
+See [RELEASING.md](./RELEASING.md) for the release process and
+[ROADMAP.md](./ROADMAP.md) for planned work.
