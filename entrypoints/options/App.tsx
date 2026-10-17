@@ -1,58 +1,79 @@
-import { useState, useEffect } from "react";
-import { getBlockedSites, saveBlockedSites, getTimeout, saveTimeout, type TimeoutOption } from "@/utils/storage";
+import { useEffect, useState } from "react";
+import {
+  getGroups,
+  saveGroups,
+  createGroup,
+  normalizeSiteInput,
+  ALLOW_PRESETS,
+  BUDGET_PRESETS,
+  type BlockGroup,
+} from "@/utils/storage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { Label } from "@/components/ui/label";
-import { Trash2, Plus, Shield, Globe, LayoutGrid, Settings2, ExternalLink, Clock } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+import { Trash2, Plus, X, Shield, Globe, Layers, Clock, Timer } from "lucide-react";
 import "@/assets/tailwind.css";
 
-const timeoutOptions: { value: TimeoutOption; label: string }[] = [
-  { value: 0, label: "No timeout - Always block" },
-  { value: 5, label: "5 minutes" },
-  { value: 15, label: "15 minutes" },
-  { value: 30, label: "30 minutes" },
-  { value: 60, label: "60 minutes" },
-];
+const allowLabels: Record<number, string> = {
+  0: "Just this once",
+  5: "5 min",
+  15: "15 min",
+  30: "30 min",
+  60: "60 min",
+};
+
+const budgetLabels: Record<number, string> = {
+  0: "Unlimited",
+  5: "5 min/day",
+  10: "10 min/day",
+  15: "15 min/day",
+  30: "30 min/day",
+  60: "60 min/day",
+};
 
 function App() {
-  const [sites, setSites] = useState<string[]>([]);
-  const [newSite, setNewSite] = useState("");
-  const [timeout, setTimeout] = useState<TimeoutOption>(0);
+  const [groups, setGroups] = useState<BlockGroup[]>([]);
+  const [newSites, setNewSites] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    getBlockedSites().then(setSites);
-    getTimeout().then(setTimeout);
+    getGroups().then(setGroups);
   }, []);
 
-  const handleTimeoutChange = (value: TimeoutOption) => {
-    setTimeout(value);
-    saveTimeout(value);
+  const persist = (updated: BlockGroup[]) => {
+    setGroups(updated);
+    saveGroups(updated);
   };
 
-  const addSite = () => {
-    const site = newSite.trim().toLowerCase();
-    if (!site) return;
+  const updateGroup = (id: string, patch: Partial<BlockGroup>) => {
+    persist(groups.map((g) => (g.id === id ? { ...g, ...patch } : g)));
+  };
 
-    let normalized = site.replace(/^https?:\/\//, "");
-    normalized = normalized.replace(/^www\./, "");
-    normalized = normalized.replace(/\/.*/, "");
+  const addGroup = () => {
+    const group = createGroup(`Group ${groups.length + 1}`);
+    persist([...groups, group]);
+  };
 
-    if (!sites.includes(normalized)) {
-      const updated = [...sites, normalized];
-      setSites(updated);
-      saveBlockedSites(updated);
+  const deleteGroup = (id: string) => {
+    persist(groups.filter((g) => g.id !== id));
+  };
+
+  const addSite = (group: BlockGroup) => {
+    const normalized = normalizeSiteInput(newSites[group.id] || "");
+    if (!normalized || group.sites.includes(normalized)) {
+      setNewSites((s) => ({ ...s, [group.id]: "" }));
+      return;
     }
-    setNewSite("");
+    updateGroup(group.id, { sites: [...group.sites, normalized] });
+    setNewSites((s) => ({ ...s, [group.id]: "" }));
   };
 
-  const removeSite = (index: number) => {
-    const updated = sites.filter((_, i) => i !== index);
-    setSites(updated);
-    saveBlockedSites(updated);
+  const removeSite = (group: BlockGroup, site: string) => {
+    updateGroup(group.id, { sites: group.sites.filter((s) => s !== site) });
   };
+
+  const totalSites = groups.reduce((sum, g) => sum + g.sites.length, 0);
 
   return (
     <div className="min-h-screen bg-background">
@@ -65,183 +86,164 @@ function App() {
             </div>
             <div>
               <h1 className="text-lg font-semibold leading-none">Blockera</h1>
-              <p className="text-xs text-muted-foreground mt-1">Site Blocker Settings</p>
+              <p className="text-xs text-muted-foreground mt-1">Block Groups</p>
             </div>
           </div>
           <Badge variant="secondary" className="font-mono">
-            {sites.length} blocked
+            {totalSites} blocked
           </Badge>
         </div>
       </header>
 
-      {/* Main Content */}
-      <main className="container mx-auto max-w-5xl px-4 py-8">
-        <div className="grid gap-6 lg:grid-cols-[280px_1fr]">
-          
-          {/* Sidebar */}
-          <aside className="space-y-6 lg:block">
-            <Card>
-              <CardHeader className="pb-3">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
-                  <Settings2 className="h-4 w-4" />
-                  About
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="text-sm text-muted-foreground space-y-3">
-                <p>
-                  Blockera helps you stay focused by blocking distracting websites.
-                </p>
-                <Separator />
-                <div className="space-y-2">
-                  <div className="flex items-center gap-2 text-xs">
-                    <LayoutGrid className="h-3 w-3" />
-                    <span>Blur overlay on blocked sites</span>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <ExternalLink className="h-3 w-3" />
-                    <span>Click "Let me in" to dismiss</span>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          </aside>
+      <main className="container mx-auto max-w-5xl px-4 py-8 space-y-6">
+        <p className="text-sm text-muted-foreground">
+          Sites are organised into groups, each with its own rules. A site is
+          blocked when it matches any site in a group, and the first matching
+          group's rules apply. Blocking covers the domain and all its subdomains.
+        </p>
 
-          {/* Main Settings Area */}
-          <div className="space-y-6">
-            
-            {/* Timeout Settings Card */}
-            <Card>
-              <CardHeader className="space-y-1">
-                <CardTitle className="text-xl flex items-center gap-2">
-                  <Clock className="h-5 w-5" />
-                  Timeout Settings
-                </CardTitle>
-                <CardDescription>
-                  Choose how long to allow access when you dismiss the block screen
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="grid gap-3">
-                  {timeoutOptions.map((option) => (
-                    <div
-                      key={option.value}
-                      className={`flex items-center justify-between rounded-lg border p-3 cursor-pointer transition-colors ${
-                        timeout === option.value
-                          ? "border-primary bg-primary/5"
-                          : "hover:bg-muted/50"
-                      }`}
-                      onClick={() => handleTimeoutChange(option.value)}
-                    >
-                      <Label className="cursor-pointer flex-1">{option.label}</Label>
-                      <div
-                        className={`h-4 w-4 rounded-full border ${
-                          timeout === option.value
-                            ? "border-primary bg-primary"
-                            : "border-muted-foreground"
-                        }`}
+        {groups.map((group) => (
+          <Card key={group.id}>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex-1">
+                  <Input
+                    value={group.name}
+                    onChange={(e) => updateGroup(group.id, { name: e.target.value })}
+                    placeholder="Group name"
+                    className="text-lg font-semibold border-transparent bg-transparent px-0 focus-visible:ring-0 h-8"
+                  />
+                  <CardDescription className="mt-1">
+                    {group.sites.length} {group.sites.length === 1 ? "site" : "sites"}
+                  </CardDescription>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => deleteGroup(group.id)}
+                  className="h-8 w-8 p-0 text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  <span className="sr-only">Delete {group.name}</span>
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              {/* Sites */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Globe className="h-4 w-4 text-muted-foreground" />
+                  Sites
+                </div>
+                {group.sites.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {group.sites.map((site) => (
+                      <span
+                        key={site}
+                        className="inline-flex items-center gap-1 rounded-md border bg-muted/50 pl-2.5 pr-1 py-1 text-sm font-mono"
                       >
-                        {timeout === option.value && (
-                          <div className="h-4 w-4 rounded-full bg-primary flex items-center justify-center">
-                            <div className="h-1.5 w-1.5 rounded-full bg-white" />
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Add Site Card */}
-            <Card>
-              <CardHeader className="space-y-1">
-                <CardTitle className="text-xl">Add Site</CardTitle>
-                <CardDescription>
-                  Enter a domain to block. Examples: twitter.com, reddit.com, youtube.com
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <div className="flex gap-3">
+                        {site}
+                        <button
+                          onClick={() => removeSite(group, site)}
+                          className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                        >
+                          <X className="h-3 w-3" />
+                          <span className="sr-only">Remove {site}</span>
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    No sites yet — this group blocks nothing.
+                  </p>
+                )}
+                <div className="flex gap-2">
                   <div className="relative flex-1">
                     <Globe className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       type="text"
-                      value={newSite}
-                      onChange={(e) => setNewSite(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && addSite()}
+                      value={newSites[group.id] || ""}
+                      onChange={(e) =>
+                        setNewSites((s) => ({ ...s, [group.id]: e.target.value }))
+                      }
+                      onKeyDown={(e) => e.key === "Enter" && addSite(group)}
                       placeholder="example.com"
                       className="pl-9"
                     />
                   </div>
-                  <Button 
-                    onClick={addSite} 
-                    disabled={!newSite.trim()}
+                  <Button
+                    onClick={() => addSite(group)}
+                    disabled={!(newSites[group.id] || "").trim()}
                     className="gap-2"
                   >
                     <Plus className="h-4 w-4" />
-                    Add Site
+                    Add
                   </Button>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
 
-            {/* Blocked Sites List */}
-            <Card>
-              <CardHeader className="space-y-1">
-                <div className="flex items-center justify-between">
-                  <CardTitle className="text-xl">Blocked Sites</CardTitle>
-                  {sites.length > 0 && (
-                    <Badge variant="outline" className="font-mono">
-                      {sites.length} total
-                    </Badge>
-                  )}
-                </div>
-                <CardDescription>
-                  Manage your list of blocked websites
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {sites.length > 0 ? (
-                  <div className="space-y-2">
-                    {sites.map((site, index) => (
-                      <div
-                        key={site}
-                        className="group flex items-center justify-between rounded-md border p-3 transition-colors hover:bg-muted/50"
+              <Separator />
+
+              {/* Rules */}
+              <div className="grid gap-6 sm:grid-cols-2">
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Clock className="h-4 w-4 text-muted-foreground" />
+                    Access per dismiss
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    How long a "Let me in" click unblocks the site.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {ALLOW_PRESETS.map((min) => (
+                      <Button
+                        key={min}
+                        size="sm"
+                        variant={group.allowMinutes === min ? "default" : "outline"}
+                        onClick={() => updateGroup(group.id, { allowMinutes: min })}
+                        className="text-xs"
                       >
-                        <div className="flex items-center gap-3">
-                          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-muted">
-                            <Globe className="h-4 w-4 text-muted-foreground" />
-                          </div>
-                          <code className="text-sm font-medium">{site}</code>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeSite(index)}
-                          className="h-8 w-8 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                          <span className="sr-only">Remove {site}</span>
-                        </Button>
-                      </div>
+                        {allowLabels[min]}
+                      </Button>
                     ))}
                   </div>
-                ) : (
-                  <div className="rounded-lg border border-dashed p-12 text-center">
-                    <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-muted">
-                      <Globe className="h-6 w-6 text-muted-foreground" />
-                    </div>
-                    <h3 className="mt-4 text-sm font-medium">No sites blocked</h3>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Add your first site above to start blocking distractions
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+                </div>
 
-          </div>
-        </div>
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <Timer className="h-4 w-4 text-muted-foreground" />
+                    Daily limit
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Total allowed time per day. Once spent, the site is locked
+                    until midnight.
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {BUDGET_PRESETS.map((min) => (
+                      <Button
+                        key={min}
+                        size="sm"
+                        variant={group.dailyBudgetMinutes === min ? "default" : "outline"}
+                        onClick={() =>
+                          updateGroup(group.id, { dailyBudgetMinutes: min })
+                        }
+                        className="text-xs"
+                      >
+                        {budgetLabels[min]}
+                      </Button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+
+        <Button onClick={addGroup} variant="outline" className="w-full gap-2 border-dashed">
+          <Layers className="h-4 w-4" />
+          Add block group
+        </Button>
       </main>
     </div>
   );

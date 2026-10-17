@@ -1,21 +1,26 @@
 import { defineContentScript } from 'wxt/utils/define-content-script';
 import { browser } from 'wxt/browser';
-import type { TimeoutOption } from '@/utils/storage';
+
+interface SiteState {
+  blocked: boolean;
+  groupName?: string;
+  allowPresets: number[];
+  defaultAllow: number;
+  hardBlock: boolean;
+  budgetRemaining: number | null;
+  tempAllowedUntil?: number;
+}
+
+interface TempAllowResponse {
+  success: boolean;
+  grantedMinutes?: number;
+  reason?: string;
+}
 
 const OVERLAY_ID = 'blockera-overlay';
 const OVERLAY_STYLE_ID = 'blockera-overlay-style';
 const TIMER_ID = 'blockera-timer';
 const TIMER_STYLE_ID = 'blockera-timer-style';
-
-const TIMEOUT_OPTIONS: TimeoutOption[] = [0, 5, 15, 30, 60];
-
-const timeoutLabels: Record<TimeoutOption, string> = {
-  0: 'Just this once',
-  5: '5 minutes',
-  15: '15 minutes',
-  30: '30 minutes',
-  60: '60 minutes',
-};
 
 const timerStyles = `
   #blockera-timer {
@@ -161,8 +166,17 @@ const overlayStyles = `
   .blockera-dismiss-btn:hover {
     background: #f0f0f0 !important;
   }
+  .blockera-info {
+    font-size: 12px;
+    opacity: 0.65;
+    margin-top: 16px !important;
+    margin-bottom: 0 !important;
+  }
   ${timerStyles}
 `;
+
+const labelForMinutes = (min: number) =>
+  min === 0 ? 'Just this once' : `${min} minutes`;
 
 export default defineContentScript({
   matches: ['<all_urls>'],
@@ -176,54 +190,42 @@ export default defineContentScript({
     const hostname = window.location.hostname.replace(/^www\./, '');
 
     browser.runtime.onMessage.addListener((message) => {
-      if (message.type === 'BLOCK_SITE') {
-        browser.runtime
-          .sendMessage({ type: 'GET_TIMEOUT' })
-          .then((timeout) => showBlurOverlay((timeout as TimeoutOption) ?? 0))
-          .catch(() => showBlurOverlay(0));
-      }
-
-      if (message.type === 'SHOW_TIMER') {
-        void queryTimerAndStart(hostname);
+      if (message.type === 'CHECK_SITE') {
+        void applySiteState();
       }
     });
 
     // Self-check on load: don't rely solely on the background push, which
     // can miss navigations (prerendering, cached loads).
-    void (async () => {
+    void applySiteState();
+
+    async function applySiteState() {
+      let state: SiteState | null = null;
       try {
-        const blocked = (await browser.runtime.sendMessage({
-          type: 'IS_BLOCKED',
+        state = (await browser.runtime.sendMessage({
+          type: 'GET_SITE_STATE',
           site: hostname,
-        })) as boolean;
-        if (blocked) {
-          const timeout = (await browser.runtime.sendMessage({
-            type: 'GET_TIMEOUT',
-          })) as TimeoutOption;
-          showBlurOverlay(timeout ?? 0);
-          return;
-        }
-        await queryTimerAndStart(hostname);
+        })) as SiteState | null;
       } catch {
-        // Extension context unavailable; nothing to do.
+        return; // Extension context unavailable; nothing to do.
       }
-    })();
+      if (!state) return;
+
+      // A temp-allowed site still reports blocked=true; the active
+      // allowance wins until it expires.
+      if (state.tempAllowedUntil && state.tempAllowedUntil > Date.now()) {
+        startTimer(
+          (state.tempAllowedUntil - Date.now()) / 60000,
+          state.tempAllowedUntil,
+        );
+        return;
+      }
+      if (state.blocked) {
+        showOverlay(state);
+      }
+    }
   },
 });
-
-async function queryTimerAndStart(site: string) {
-  try {
-    const timerData = (await browser.runtime.sendMessage({
-      type: 'GET_TIMER_FOR_SITE',
-      site,
-    })) as { endTime: number } | null;
-    if (timerData && timerData.endTime > Date.now()) {
-      startTimer((timerData.endTime - Date.now()) / 60000, site, timerData.endTime);
-    }
-  } catch {
-    // Extension context unavailable; nothing to do.
-  }
-}
 
 let timerInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -235,38 +237,62 @@ function stopTimerLoop() {
   window.removeEventListener('pagehide', stopTimerLoop);
 }
 
-function showBlurOverlay(currentTimeout: TimeoutOption) {
-  if (document.getElementById(OVERLAY_ID)) return;
+function showOverlay(state: SiteState) {
+  document.getElementById(OVERLAY_ID)?.remove();
 
   const hostname = window.location.hostname.replace(/^www\./, '');
-  const defaultSelection: TimeoutOption = currentTimeout ?? 0;
-  let selectedTimeout: TimeoutOption = defaultSelection;
+  let selectedTimeout = state.defaultAllow;
 
   const overlay = document.createElement('div');
   overlay.id = OVERLAY_ID;
 
-  const buttonsHTML = TIMEOUT_OPTIONS.map(
-    (min) => `
-      <button
-        class="blockera-timeout-btn ${min === defaultSelection ? 'blockera-selected' : ''}"
-        data-minutes="${min}"
-      >
-        ${timeoutLabels[min]}
-      </button>
-    `,
-  ).join('');
+  const description = state.hardBlock
+    ? `You've used your daily limit for ${state.groupName ?? 'this site'}.`
+    : 'This site is on your block list.';
+
+  let budgetInfo = '';
+  if (!state.hardBlock && state.budgetRemaining !== null) {
+    budgetInfo = `<p class="blockera-info">${
+      state.budgetRemaining > 0
+        ? `${state.budgetRemaining} min left today`
+        : 'No time left today'
+    }</p>`;
+  }
+
+  const optionsHTML = state.hardBlock
+    ? ''
+    : `
+      <div class="blockera-timeout-section">
+        <p class="blockera-timeout-label">Allow access for:</p>
+        <div class="blockera-timeout-options">
+          ${state.allowPresets
+            .map(
+              (min) => `
+            <button
+              class="blockera-timeout-btn ${min === selectedTimeout ? 'blockera-selected' : ''}"
+              data-minutes="${min}"
+            >
+              ${labelForMinutes(min)}
+            </button>
+          `,
+            )
+            .join('')}
+        </div>
+      </div>
+      <button id="blockera-dismiss" class="blockera-dismiss-btn">Let me in</button>
+      ${budgetInfo}
+    `;
+
+  const hardBlockFooter = state.hardBlock
+    ? '<p class="blockera-info">It will unlock at midnight.</p>'
+    : '';
 
   overlay.innerHTML = `
     <div class="blockera-content">
       <h1>Stay Focused</h1>
-      <p>This site is on your block list.</p>
-      <div class="blockera-timeout-section">
-        <p class="blockera-timeout-label">Allow access for:</p>
-        <div class="blockera-timeout-options">
-          ${buttonsHTML}
-        </div>
-      </div>
-      <button id="blockera-dismiss" class="blockera-dismiss-btn">Let me in</button>
+      <p>${description}</p>
+      ${optionsHTML}
+      ${hardBlockFooter}
     </div>
   `;
 
@@ -277,44 +303,53 @@ function showBlurOverlay(currentTimeout: TimeoutOption) {
     document.head.appendChild(style);
   }
 
-  overlay.addEventListener('click', (e) => {
-    const target = e.target as HTMLElement;
+  if (!state.hardBlock) {
+    overlay.addEventListener('click', (e) => {
+      const target = e.target as HTMLElement;
 
-    if (target.classList.contains('blockera-timeout-btn')) {
-      e.preventDefault();
-      overlay.querySelectorAll('.blockera-timeout-btn').forEach((b) => {
-        b.classList.remove('blockera-selected');
-      });
-      target.classList.add('blockera-selected');
-      selectedTimeout = parseInt(target.getAttribute('data-minutes') || '0', 10) as TimeoutOption;
-      return;
-    }
+      if (target.classList.contains('blockera-timeout-btn')) {
+        e.preventDefault();
+        overlay.querySelectorAll('.blockera-timeout-btn').forEach((b) => {
+          b.classList.remove('blockera-selected');
+        });
+        target.classList.add('blockera-selected');
+        selectedTimeout = parseInt(target.getAttribute('data-minutes') || '0', 10);
+        return;
+      }
 
-    if (target.id === 'blockera-dismiss' || target.classList.contains('blockera-dismiss-btn')) {
-      e.preventDefault();
-      void (async () => {
-        try {
-          await browser.runtime.sendMessage({
-            type: 'TEMP_ALLOW',
-            site: hostname,
-            minutes: selectedTimeout,
-          });
-          overlay.remove();
-          if (selectedTimeout > 0) {
-            startTimer(selectedTimeout, hostname);
+      if (target.id === 'blockera-dismiss' || target.classList.contains('blockera-dismiss-btn')) {
+        e.preventDefault();
+        void (async () => {
+          let response: TempAllowResponse | null = null;
+          try {
+            response = (await browser.runtime.sendMessage({
+              type: 'TEMP_ALLOW',
+              site: hostname,
+              minutes: selectedTimeout,
+            })) as TempAllowResponse | null;
+          } catch {
+            return; // Extension context unavailable; keep the overlay up.
           }
-        } catch {
-          // Extension context unavailable; keep the overlay up.
-        }
-      })();
-    }
-  });
+          if (!response?.success) {
+            // Budget ran out between render and click (or clamped to zero):
+            // fall back to the hard-block overlay.
+            showOverlay({ ...state, hardBlock: true, budgetRemaining: 0 });
+            return;
+          }
+          overlay.remove();
+          if ((response.grantedMinutes ?? 0) > 0) {
+            startTimer(response.grantedMinutes!);
+          }
+        })();
+      }
+    });
+  }
 
   const root = document.body || document.documentElement;
   root.appendChild(overlay);
 }
 
-function startTimer(minutes: number, site: string, existingEndTime?: number) {
+function startTimer(minutes: number, existingEndTime?: number) {
   stopTimerLoop();
 
   const existingTimer = document.getElementById(TIMER_ID);
@@ -355,7 +390,19 @@ function startTimer(minutes: number, site: string, existingEndTime?: number) {
         if (!document.getElementById(TIMER_ID)) {
           document.getElementById(TIMER_STYLE_ID)?.remove();
         }
-        showBlurOverlay(0);
+        // Re-check state: the site may now be budget-locked or unblocked.
+        void browser.runtime
+          .sendMessage({
+            type: 'GET_SITE_STATE',
+            site: window.location.hostname.replace(/^www\./, ''),
+          })
+          .then((state) => {
+            const s = state as SiteState;
+            if (s?.blocked) showOverlay(s);
+          })
+          .catch(() => {
+            // Extension context unavailable.
+          });
       }, 2000);
       return;
     }

@@ -1,13 +1,29 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { browser } from 'wxt/browser';
 import {
-  getBlockedSites,
-  getTimeout,
-  addTempAllowedSite,
+  findGroupForSite,
   isSiteTempAllowed,
   getTempAllowedSites,
+  getBudgetRemaining,
+  addTempAllowedSite,
+  addUsage,
   cleanupExpiredTempAllowed,
+  ALLOW_PRESETS,
 } from '@/utils/storage';
+
+export interface SiteState {
+  blocked: boolean;
+  groupName?: string;
+  /** Minutes offered on the overlay; 0 = just this once. */
+  allowPresets: number[];
+  defaultAllow: number;
+  /** Budget exhausted: overlay shows no way out until midnight. */
+  hardBlock: boolean;
+  /** Minutes of budget left today; null = no limit configured. */
+  budgetRemaining: number | null;
+  /** Set when the site is currently temp-allowed. */
+  tempAllowedUntil?: number;
+}
 
 const hostnameFromUrl = (url: string) => {
   try {
@@ -17,62 +33,83 @@ const hostnameFromUrl = (url: string) => {
   }
 };
 
-const isBlockedSite = async (hostname: string) => {
-  const blockedSites = await getBlockedSites();
-  return blockedSites.some(
-    (site) => hostname === site || hostname.endsWith(`.${site}`),
-  );
+const NOT_BLOCKED: SiteState = {
+  blocked: false,
+  allowPresets: [],
+  defaultAllow: 0,
+  hardBlock: false,
+  budgetRemaining: null,
+};
+
+const getSiteState = async (hostname: string): Promise<SiteState> => {
+  const group = await findGroupForSite(hostname);
+  if (!group) return { blocked: false, allowPresets: [], defaultAllow: 0, hardBlock: false, budgetRemaining: null };
+
+  const budgetRemaining = await getBudgetRemaining(group);
+  const tempAllowed = await isSiteTempAllowed(hostname);
+  let tempAllowedUntil: number | undefined;
+  if (tempAllowed) {
+    const sites = await getTempAllowedSites();
+    tempAllowedUntil = sites.find((s) => s.site === hostname)?.allowedUntil;
+  }
+
+  const hardBlock = budgetRemaining !== null && budgetRemaining <= 0;
+
+  return {
+    blocked: true,
+    groupName: group.name,
+    allowPresets: [...ALLOW_PRESETS],
+    defaultAllow: group.allowMinutes,
+    hardBlock,
+    budgetRemaining,
+    tempAllowedUntil,
+  };
 };
 
 export default defineBackground(() => {
   browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message.type === 'GET_TIMEOUT') {
-      getTimeout().then(sendResponse);
-      return true; // Keep channel open for async
-    }
-
-    if (message.type === 'IS_BLOCKED') {
+    if (message.type === 'GET_SITE_STATE') {
       const hostname = String(message.site || '');
       if (!hostname) {
-        sendResponse(false);
+        sendResponse(NOT_BLOCKED);
         return false;
       }
-      (async () => {
-        try {
-          const tempAllowed = await isSiteTempAllowed(hostname);
-          sendResponse(!tempAllowed && (await isBlockedSite(hostname)));
-        } catch {
-          sendResponse(false);
-        }
-      })();
-      return true;
-    }
-
-    if (message.type === 'GET_TIMER_FOR_SITE') {
-      const { site } = message;
-      getTempAllowedSites()
-        .then((sites) => {
-          const siteData = sites.find((s) => s.site === site);
-          if (siteData && siteData.allowedUntil > Date.now()) {
-            sendResponse({ endTime: siteData.allowedUntil });
-          } else {
-            sendResponse(null);
-          }
-        })
-        .catch(() => sendResponse(null));
+      getSiteState(hostname)
+        .then(sendResponse)
+        .catch(() => sendResponse(NOT_BLOCKED));
       return true;
     }
 
     if (message.type === 'TEMP_ALLOW') {
-      const { site, minutes } = message;
-      if (minutes > 0) {
-        addTempAllowedSite(site, minutes)
-          .then(() => sendResponse({ success: true }))
-          .catch(() => sendResponse({ success: false }));
-        return true;
-      }
-      sendResponse({ success: true });
-      return false;
+      const { site, minutes } = message as { site: string; minutes: number };
+      (async () => {
+        try {
+          const group = await findGroupForSite(site);
+          if (!group) {
+            sendResponse({ success: true, grantedMinutes: 0 });
+            return;
+          }
+
+          if (minutes > 0) {
+            const remaining = await getBudgetRemaining(group);
+            if (remaining !== null && remaining <= 0) {
+              sendResponse({ success: false, reason: 'budget' });
+              return;
+            }
+            // Clamp to whatever budget is left (null = no limit).
+            const grant = remaining === null ? minutes : Math.min(minutes, remaining);
+            await addTempAllowedSite(site, grant);
+            await addUsage(group.id, grant);
+            sendResponse({ success: true, grantedMinutes: grant });
+          } else {
+            // "Just this once": single page-view pass, nothing recorded.
+            sendResponse({ success: true, grantedMinutes: 0 });
+          }
+        } catch {
+          sendResponse({ success: false, reason: 'error' });
+        }
+      })();
+      return true;
     }
 
     return false;
@@ -116,18 +153,12 @@ export default defineBackground(() => {
       const hostname = hostnameFromUrl(details.url);
       if (!hostname) return;
 
-      const tempAllowed = await isSiteTempAllowed(hostname);
-      if (tempAllowed) {
-        await injectAndSendMessage(details.tabId, {
-          type: 'SHOW_TIMER',
-          site: hostname,
-        });
-        return;
-      }
+      const group = await findGroupForSite(hostname);
+      if (!group) return;
 
-      if (await isBlockedSite(hostname)) {
-        await injectAndSendMessage(details.tabId, { type: 'BLOCK_SITE' });
-      }
+      // Content script re-checks its own state (blocked, budget, timer)
+      // when it receives this.
+      await injectAndSendMessage(details.tabId, { type: 'CHECK_SITE' });
     } catch {
       // Navigation raced or the tab is gone; the content script's
       // self-check on load covers missed events.
@@ -139,7 +170,8 @@ export default defineBackground(() => {
   browser.webNavigation.onCompleted.addListener(handleNavigation);
   browser.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
 
-  // Purge expired temporary allowances when the browser or extension starts.
+  // Purge expired temporary allowances and stale usage when the browser
+  // or extension starts.
   browser.runtime.onStartup.addListener(cleanupExpiredTempAllowed);
   browser.runtime.onInstalled.addListener(cleanupExpiredTempAllowed);
 });
