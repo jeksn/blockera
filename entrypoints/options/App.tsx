@@ -32,7 +32,6 @@ import {
   Timer,
   Ban,
   Lock,
-  Layers,
 } from "lucide-react";
 import "@/assets/tailwind.css";
 
@@ -255,14 +254,15 @@ function Settings() {
               </button>
             ))}
 
-            <Button
+            <button
               onClick={addGroup}
-              variant="outline"
-              className="w-full mt-2 gap-2 border-dashed justify-start"
+              className="w-full mt-3 flex items-center gap-2 rounded-md border border-dashed border-border px-3 py-2 text-sm text-muted-foreground transition-colors hover:border-muted-foreground hover:text-foreground"
             >
-              <Layers className="h-4 w-4" />
-              Add group
-            </Button>
+              <span className="flex h-5 w-5 items-center justify-center rounded-full border border-current">
+                <Plus className="h-3 w-3" />
+              </span>
+              New group
+            </button>
           </aside>
 
           {/* Main panel */}
