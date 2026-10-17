@@ -21,6 +21,13 @@ subdomains) and a set of rules:
 - **Daily limit** — optionally cap total allowed time per day (e.g.
   30 min/day). Once the budget is spent, the site is locked until midnight
   and the overlay offers no way out.
+- **Delay** — the "Let me in" button stays disabled for the first seconds
+  after the block screen appears.
+- **Active hours** — optionally restrict blocking to a time window, e.g.
+  22:00–07:00 (windows may cross midnight).
+
+Groups can be exported to and imported from a JSON file in the Security
+section.
 
 The first group that matches a site wins. A temporary allowance lasts for
 the granted minutes; the countdown timer shows the remaining time and the

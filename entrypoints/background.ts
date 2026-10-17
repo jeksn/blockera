@@ -7,6 +7,8 @@ import {
   getBudgetRemaining,
   addTempAllowedSite,
   addUsage,
+  addBlockAttempt,
+  isGroupActive,
   cleanupExpiredTempAllowed,
   ALLOW_PRESETS,
 } from '@/utils/storage';
@@ -25,6 +27,10 @@ export interface SiteState {
   budgetRemaining: number | null;
   /** Set when the site is currently temp-allowed. */
   tempAllowedUntil?: number;
+  /** Seconds the dismiss button stays disabled. */
+  delaySeconds: number;
+  /** How many times the block screen showed for this site today. */
+  attemptsToday?: number;
 }
 
 const hostnameFromUrl = (url: string) => {
@@ -41,13 +47,18 @@ const NOT_BLOCKED: SiteState = {
   defaultAllow: 0,
   hardBlock: false,
   budgetRemaining: null,
+  delaySeconds: 0,
 };
 
 const getSiteState = async (hostname: string): Promise<SiteState> => {
   const group = await findGroupForSite(hostname);
   if (!group) return NOT_BLOCKED;
 
+  // Outside the group's active hours, the site isn't blocked at all.
+  if (!isGroupActive(group)) return NOT_BLOCKED;
+
   if (!group.allowOverride) {
+    const attemptsToday = await addBlockAttempt(hostname);
     return {
       blocked: true,
       groupName: group.name,
@@ -56,6 +67,8 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
       hardBlock: true,
       hardBlockReason: 'strict',
       budgetRemaining: null,
+      delaySeconds: 0,
+      attemptsToday,
     };
   }
 
@@ -67,7 +80,21 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
     tempAllowedUntil = sites.find((s) => s.site === hostname)?.allowedUntil;
   }
 
+  if (tempAllowedUntil && tempAllowedUntil > Date.now()) {
+    return {
+      blocked: true,
+      groupName: group.name,
+      allowPresets: [...ALLOW_PRESETS],
+      defaultAllow: group.allowMinutes,
+      hardBlock: false,
+      budgetRemaining,
+      tempAllowedUntil,
+      delaySeconds: group.delaySeconds,
+    };
+  }
+
   const hardBlock = budgetRemaining !== null && budgetRemaining <= 0;
+  const attemptsToday = await addBlockAttempt(hostname);
 
   return {
     blocked: true,
@@ -77,7 +104,8 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
     hardBlock,
     hardBlockReason: hardBlock ? 'budget' : undefined,
     budgetRemaining,
-    tempAllowedUntil,
+    attemptsToday,
+    delaySeconds: group.delaySeconds,
   };
 };
 
@@ -162,13 +190,13 @@ export default defineBackground(() => {
     return false;
   };
 
+  // Note: no frameId filter — tabs.sendMessage without a frameId reaches
+  // all frames in the tab, which is what we want now that the content
+  // script runs in iframes too.
   const handleNavigation = async (details: {
     tabId: number;
     url: string;
-    frameId: number;
   }) => {
-    if (details.frameId !== 0) return;
-
     try {
       const hostname = hostnameFromUrl(details.url);
       if (!hostname) return;

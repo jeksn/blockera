@@ -1,5 +1,28 @@
 # Changelog
 
+## Unreleased
+
+### Features
+
+- **Backup:** export groups to a JSON file and import a previously
+  exported one (Security section). Import replaces all groups; passwords
+  and usage are never included.
+- **Active hours** per group: block only during a set time window
+  (e.g. 22:00–07:00; windows may cross midnight). Outside the window the
+  group doesn't block at all.
+- **Delay** per group: "Let me in" stays disabled for the first 5 or 10
+  seconds after the block screen appears.
+- **Attempt counter:** the block screen shows how many times you've hit
+  it today (counted per site, reset daily).
+- **Iframes:** blocked sites embedded in other pages are now covered —
+  the content script runs in all frames, not just the top one.
+
+### Changes
+
+- Incognito limitation (overlay doesn't run there unless explicitly
+  allowed) is now documented on the landing page.
+- Firefox build verified to compile; browser testing still pending.
+
 ## v0.2.0 — 2026-10-17
 
 ### Features

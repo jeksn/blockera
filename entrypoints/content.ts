@@ -10,6 +10,8 @@ interface SiteState {
   hardBlockReason?: 'strict' | 'budget';
   budgetRemaining: number | null;
   tempAllowedUntil?: number;
+  delaySeconds: number;
+  attemptsToday?: number;
 }
 
 interface TempAllowResponse {
@@ -167,6 +169,10 @@ const overlayStyles = `
   .blockera-dismiss-btn:hover {
     background: #f0f0f0 !important;
   }
+  .blockera-dismiss-btn:disabled {
+    opacity: 0.5 !important;
+    cursor: default !important;
+  }
   .blockera-info {
     font-size: 12px;
     opacity: 0.65;
@@ -181,6 +187,9 @@ const labelForMinutes = (min: number) =>
 
 export default defineContentScript({
   matches: ['<all_urls>'],
+  // Run in iframes too, so blocked sites embedded in other pages are
+  // covered (a fixed-position overlay fills the frame's viewport).
+  allFrames: true,
   main() {
     // Guard against double registration when the background script injects
     // this file into a tab where it already auto-loaded.
@@ -253,6 +262,11 @@ function showOverlay(state: SiteState) {
       : `You've used your daily limit for ${state.groupName ?? 'this site'}.`
     : 'This site is on your block list.';
 
+  const attemptsInfo =
+    state.attemptsToday && state.attemptsToday > 1
+      ? `<p class="blockera-info">You've tried to open this ${state.attemptsToday} times today</p>`
+      : '';
+
   let budgetInfo = '';
   if (!state.hardBlock && state.budgetRemaining !== null) {
     budgetInfo = `<p class="blockera-info">${
@@ -290,13 +304,13 @@ function showOverlay(state: SiteState) {
     state.hardBlock && state.hardBlockReason === 'budget'
       ? '<p class="blockera-info">It will unlock at midnight.</p>'
       : '';
-
   overlay.innerHTML = `
     <div class="blockera-content">
       <h1>Stay Focused</h1>
       <p>${description}</p>
       ${optionsHTML}
       ${hardBlockFooter}
+      ${attemptsInfo}
     </div>
   `;
 
@@ -356,6 +370,40 @@ function showOverlay(state: SiteState) {
 
   const root = document.body || document.documentElement;
   root.appendChild(overlay);
+
+  if (!state.hardBlock && state.delaySeconds > 0) {
+    const dismissBtn = overlay.querySelector<HTMLButtonElement>('#blockera-dismiss');
+    if (dismissBtn) startDismissDelay(dismissBtn, state.delaySeconds);
+  }
+}
+
+let dismissDelayInterval: ReturnType<typeof setInterval> | undefined;
+
+/** Keep the dismiss button disabled for the group's delay period. */
+function startDismissDelay(btn: HTMLButtonElement, seconds: number) {
+  if (dismissDelayInterval !== undefined) clearInterval(dismissDelayInterval);
+  btn.disabled = true;
+  let remaining = seconds;
+
+  const tick = () => {
+    if (!document.getElementById(OVERLAY_ID)) {
+      if (dismissDelayInterval !== undefined) clearInterval(dismissDelayInterval);
+      dismissDelayInterval = undefined;
+      return;
+    }
+    if (remaining <= 0) {
+      btn.disabled = false;
+      btn.textContent = 'Let me in';
+      if (dismissDelayInterval !== undefined) clearInterval(dismissDelayInterval);
+      dismissDelayInterval = undefined;
+      return;
+    }
+    btn.textContent = `Let me in (${remaining})`;
+    remaining -= 1;
+  };
+
+  tick();
+  dismissDelayInterval = setInterval(tick, 1000);
 }
 
 function startTimer(minutes: number, existingEndTime?: number) {

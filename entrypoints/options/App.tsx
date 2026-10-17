@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ChangeEvent } from "react";
 import {
   getGroups,
   saveGroups,
@@ -6,6 +6,9 @@ import {
   normalizeSiteInput,
   ALLOW_PRESETS,
   BUDGET_PRESETS,
+  DELAY_PRESETS,
+  exportGroupsJSON,
+  importGroupsFromJSON,
   getPasswordSetting,
   savePasswordSetting,
   clearPasswordSetting,
@@ -268,6 +271,12 @@ function Settings() {
               <SecurityPanel
                 hasPassword={hasPassword}
                 onPasswordChange={setHasPassword}
+                onGroupsImported={(imported) => {
+                  setGroups(imported);
+                  saveGroups(imported);
+                  setSelectedId(imported[0]?.id ?? null);
+                }}
+                currentGroupCount={groups.length}
               />
             ) : view === 'home' ? (
               <Landing onAddGroup={addGroup} groupCount={groups.length} />
@@ -394,7 +403,9 @@ function Landing({
             It is deliberately bypassable by anyone determined: the extension
             can be disabled or removed from chrome://extensions in seconds,
             and it only covers this browser. Other browsers, other devices,
-            and other user accounts are not covered.
+            and other user accounts are not covered. It also doesn't run in
+            incognito windows unless you explicitly allow it in the
+            extension's details.
           </p>
           <p>
             The settings password is a speed bump against a moment of
@@ -517,6 +528,60 @@ function GroupEditor({
 
         <Separator />
 
+        {/* Active hours */}
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-sm font-medium">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            Active hours
+          </div>
+          <p className="text-xs text-muted-foreground">
+            When this group's blocking applies. Windows may cross midnight
+            (e.g. 22:00 to 07:00).
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant={!group.activeFrom || !group.activeTo ? "default" : "outline"}
+              onClick={() => onUpdate({ activeFrom: null, activeTo: null })}
+              className="text-xs"
+            >
+              Always
+            </Button>
+            <Button
+              size="sm"
+              variant={group.activeFrom && group.activeTo ? "default" : "outline"}
+              onClick={() =>
+                onUpdate({
+                  activeFrom: group.activeFrom ?? "22:00",
+                  activeTo: group.activeTo ?? "07:00",
+                })
+              }
+              className="text-xs"
+            >
+              Set hours
+            </Button>
+          </div>
+          {group.activeFrom && group.activeTo && (
+            <div className="flex items-center gap-2 pt-1">
+              <Input
+                type="time"
+                value={group.activeFrom}
+                onChange={(e) => onUpdate({ activeFrom: e.target.value || null })}
+                className="w-32"
+              />
+              <span className="text-sm text-muted-foreground">to</span>
+              <Input
+                type="time"
+                value={group.activeTo}
+                onChange={(e) => onUpdate({ activeTo: e.target.value || null })}
+                className="w-32"
+              />
+            </div>
+          )}
+        </div>
+
+        <Separator />
+
         {/* Override */}
         <div className="space-y-2">
           <div className="flex items-center gap-2 text-sm font-medium">
@@ -599,6 +664,30 @@ function GroupEditor({
                   ))}
                 </div>
               </div>
+
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Timer className="h-4 w-4 text-muted-foreground" />
+                  Delay
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  "Let me in" stays disabled for the first seconds after the
+                  block screen appears — a breather before you can unblock.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {DELAY_PRESETS.map((s) => (
+                    <Button
+                      key={s}
+                      size="sm"
+                      variant={group.delaySeconds === s ? "default" : "outline"}
+                      onClick={() => onUpdate({ delaySeconds: s })}
+                      className="text-xs"
+                    >
+                      {s === 0 ? "None" : `${s}s`}
+                    </Button>
+                  ))}
+                </div>
+              </div>
             </div>
           </>
         ) : (
@@ -615,9 +704,13 @@ function GroupEditor({
 function SecurityPanel({
   hasPassword,
   onPasswordChange,
+  onGroupsImported,
+  currentGroupCount,
 }: {
   hasPassword: boolean;
   onPasswordChange: (has: boolean) => void;
+  onGroupsImported: (groups: BlockGroup[]) => void;
+  currentGroupCount: number;
 }) {
   const [currentPw, setCurrentPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -658,6 +751,7 @@ function SecurityPanel({
   };
 
   return (
+    <>
     <Card>
       <CardHeader className="space-y-1">
         <CardTitle className="text-xl flex items-center gap-2">
@@ -742,6 +836,100 @@ function SecurityPanel({
             {message.text}
           </p>
         )}
+      </CardContent>
+    </Card>
+
+    <BackupCard
+      currentGroupCount={currentGroupCount}
+      onGroupsImported={onGroupsImported}
+      onMessage={setMessage}
+    />
+    </>
+  );
+}
+
+function BackupCard({
+  currentGroupCount,
+  onGroupsImported,
+  onMessage,
+}: {
+  currentGroupCount: number;
+  onGroupsImported: (groups: BlockGroup[]) => void;
+  onMessage: (message: { error: boolean; text: string }) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleExport = async () => {
+    const json = await exportGroupsJSON();
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "blockera-backup.json";
+    a.click();
+    URL.revokeObjectURL(url);
+    onMessage({ error: false, text: "Groups exported to blockera-backup.json" });
+  };
+
+  const handleImport = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const imported = await importGroupsFromJSON(text);
+      if (imported.length === 0) throw new Error("File contains no groups.");
+
+      const ok = window.confirm(
+        `Replace your current ${currentGroupCount} ${
+          currentGroupCount === 1 ? "group" : "groups"
+        } with ${imported.length} imported ${
+          imported.length === 1 ? "group" : "groups"
+        }?`
+      );
+      if (!ok) return;
+
+      onGroupsImported(imported);
+      onMessage({ error: false, text: `Imported ${imported.length} groups.` });
+    } catch (err) {
+      onMessage({
+        error: true,
+        text: err instanceof Error ? err.message : "Import failed.",
+      });
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader className="space-y-1">
+        <CardTitle className="text-xl">Backup</CardTitle>
+        <CardDescription>
+          Export your groups to a JSON file, or import a previously exported
+          one. Import replaces all current groups. Useful before reinstalling
+          the extension (e.g. after a forgotten password).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap gap-2">
+          <Button onClick={handleExport} className="gap-2">
+            Export groups
+          </Button>
+          <Button variant="outline" onClick={() => fileInputRef.current?.click()}>
+            Import groups
+          </Button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="application/json"
+            className="hidden"
+            onChange={handleImport}
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The export contains your groups and rules only — passwords and
+          usage are never included.
+        </p>
       </CardContent>
     </Card>
   );
