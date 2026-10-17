@@ -27,17 +27,12 @@ Store".
 
 ## Next — features with clear value
 
-- **Real time tracking.** Count actual minutes browsed, not minutes
-  granted (currently granting 15 and leaving after 2 still spends 15).
-  A background-content ping or visibility-API heartbeat per group.
 - **Commitment lock.** Freeze a group's rules until a chosen time
   (tomorrow, this week) — even the settings page can't change them
   without the password. Natural extension of the existing password.
 
 ## Later — polish and reach
 
-- **Stats dashboard.** Time per group/site per day, blocked attempts,
-  streaks. Only after real time tracking exists.
 - **Preset category lists.** One-click "add top 20 social sites" style
   suggestions when creating a group.
 - **Cross-device budgets.** Daily usage currently counts per device.

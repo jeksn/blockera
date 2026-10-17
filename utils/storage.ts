@@ -40,13 +40,6 @@ export interface TempAllowedSite {
   allowedUntil: number;
 }
 
-export interface GroupUsage {
-  /** Local date as YYYY-MM-DD. */
-  date: string;
-  /** Total minutes granted today. */
-  usedMinutes: number;
-}
-
 export function siteMatches(hostname: string, site: string): boolean {
   return hostname === site || hostname.endsWith(`.${site}`);
 }
@@ -154,39 +147,70 @@ export async function isSiteTempAllowed(site: string): Promise<boolean> {
   }
 }
 
-export async function getUsage(groupId: string): Promise<GroupUsage> {
+/**
+ * Daily usage per group: actual active (visible) seconds on the group's
+ * sites, keyed by local date "YYYY-MM-DD". Kept for 30 days.
+ */
+export interface DailyUsageMap {
+  [date: string]: number;
+}
+
+const USAGE_RETENTION_DAYS = 30;
+const ATTEMPTS_HISTORY_KEY = 'attemptsHistory';
+
+async function readUsageHistory(): Promise<Record<string, DailyUsageMap>> {
   const result = await browser.storage.local.get(USAGE_KEY);
-  const usage = (result[USAGE_KEY] as Record<string, GroupUsage>) || {};
+  const raw = result[USAGE_KEY] as
+    | (Record<string, DailyUsageMap> & Record<string, unknown>)
+    | undefined;
+  if (!raw) return {};
+
+  // Migrate the pre-stats format { [groupId]: { date, usedMinutes } },
+  // where "used" meant minutes granted, not actual browsing time.
+  const migrated: Record<string, DailyUsageMap> = {};
+  for (const [groupId, entry] of Object.entries(raw)) {
+    const legacy = entry as { date?: string; usedMinutes?: number };
+    if (legacy && typeof legacy === 'object' && typeof legacy.usedMinutes === 'number') {
+      migrated[groupId] = { [legacy.date || localDateString()]: legacy.usedMinutes * 60 };
+    } else {
+      migrated[groupId] = entry as DailyUsageMap;
+    }
+  }
+  return migrated;
+}
+
+function pruneDailyMap(map: DailyUsageMap): DailyUsageMap {
+  const cutoff = localDateString(new Date(Date.now() - USAGE_RETENTION_DAYS * 86400000));
+  const out: DailyUsageMap = {};
+  for (const [date, seconds] of Object.entries(map)) {
+    if (date >= cutoff) out[date] = seconds;
+  }
+  return out;
+}
+
+/** Add actual seconds browsed. Returns the group's total seconds today. */
+export async function addUsageSeconds(groupId: string, seconds: number): Promise<number> {
+  const history = await readUsageHistory();
   const today = localDateString();
-  const entry = usage[groupId];
-  if (entry && entry.date === today) return entry;
-  return { date: today, usedMinutes: 0 };
+  const map = pruneDailyMap(history[groupId] ?? {});
+  map[today] = (map[today] || 0) + seconds;
+  history[groupId] = map;
+  await browser.storage.local.set({ [USAGE_KEY]: history });
+  return map[today];
+}
+
+export async function getUsageSeconds(groupId: string, date = localDateString()): Promise<number> {
+  const history = await readUsageHistory();
+  return history[groupId]?.[date] || 0;
 }
 
 /**
- * Record granted minutes against a group's daily budget. Callers should
- * clamp the requested minutes to the remaining budget first. Returns the
- * group's total used minutes for today after the update.
+ * Seconds of budget left for a group today; null = no limit configured.
  */
-export async function addUsage(groupId: string, minutes: number): Promise<number> {
-  const result = await browser.storage.local.get(USAGE_KEY);
-  const usage = (result[USAGE_KEY] as Record<string, GroupUsage>) || {};
-  const today = localDateString();
-  const entry = usage[groupId] && usage[groupId].date === today
-    ? usage[groupId]
-    : { date: today, usedMinutes: 0 };
-
-  entry.usedMinutes += minutes;
-  usage[groupId] = entry;
-  await browser.storage.local.set({ [USAGE_KEY]: usage });
-  return entry.usedMinutes;
-}
-
-/** Minutes of budget left for a group today; null = no limit configured. */
-export async function getBudgetRemaining(group: BlockGroup): Promise<number | null> {
+export async function getBudgetRemainingSeconds(group: BlockGroup): Promise<number | null> {
   if (group.dailyBudgetMinutes <= 0) return null;
-  const usage = await getUsage(group.id);
-  return Math.max(0, group.dailyBudgetMinutes - usage.usedMinutes);
+  const used = await getUsageSeconds(group.id);
+  return Math.max(0, group.dailyBudgetMinutes * 60 - used);
 }
 
 const ATTEMPTS_KEY = 'blockAttempts';
@@ -199,9 +223,11 @@ export interface SiteAttempts {
 
 /**
  * Count a block-screen encounter for today. Throttled so the same page
- * load (self-check + navigation push) counts once. Returns today's count.
+ * load (self-check + navigation push) counts once. Also records into the
+ * per-group attempt history (used by the stats view). Returns today's
+ * count for this site.
  */
-export async function addBlockAttempt(site: string): Promise<number> {
+export async function addBlockAttempt(site: string, groupId: string): Promise<number> {
   const result = await browser.storage.local.get(ATTEMPTS_KEY);
   const map = (result[ATTEMPTS_KEY] as Record<string, SiteAttempts>) || {};
   const today = localDateString();
@@ -214,10 +240,57 @@ export async function addBlockAttempt(site: string): Promise<number> {
   if (now - entry.lastAt > 5000) {
     entry.count += 1;
     entry.lastAt = now;
+    map[site] = entry;
+    await browser.storage.local.set({ [ATTEMPTS_KEY]: map });
+
+    // Group-attributed daily history for stats.
+    const histResult = await browser.storage.local.get(ATTEMPTS_HISTORY_KEY);
+    const hist = (histResult[ATTEMPTS_HISTORY_KEY] as Record<string, Record<string, number>>) || {};
+    hist[today] = hist[today] || {};
+    hist[today][groupId] = (hist[today][groupId] || 0) + 1;
+    await browser.storage.local.set({ [ATTEMPTS_HISTORY_KEY]: hist });
   }
-  map[site] = entry;
-  await browser.storage.local.set({ [ATTEMPTS_KEY]: map });
   return entry.count;
+}
+
+/** One day of stats: seconds and block-screen counts per group. */
+export interface DayStats {
+  /** Local date "YYYY-MM-DD". */
+  date: string;
+  /** Active seconds per group id. */
+  seconds: Record<string, number>;
+  /** Block-screen encounters per group id. */
+  attempts: Record<string, number>;
+}
+
+/** Daily stats for the last `days` days, oldest first. */
+export async function getStats(groups: BlockGroup[], days = 7): Promise<DayStats[]> {
+  const usageHistory = await readUsageHistory();
+  const histResult = await browser.storage.local.get(ATTEMPTS_HISTORY_KEY);
+  const attemptsHistory = (histResult[ATTEMPTS_HISTORY_KEY] as Record<string, Record<string, number>>) || {};
+
+  const out: DayStats[] = [];
+  for (let i = days - 1; i >= 0; i--) {
+    const date = localDateString(new Date(Date.now() - i * 86400000));
+    const seconds: Record<string, number> = {};
+    const attempts: Record<string, number> = {};
+    for (const group of groups) {
+      seconds[group.id] = usageHistory[group.id]?.[date] || 0;
+      attempts[group.id] = attemptsHistory[date]?.[group.id] || 0;
+    }
+    out.push({ date, seconds, attempts });
+  }
+  return out;
+}
+
+/** Today's totals across all groups. */
+export async function getTodayTotals(): Promise<{ seconds: number; attempts: number }> {
+  const groups = await getGroups();
+  const [today] = await getStats(groups, 1);
+  return {
+    seconds: Object.values(today.seconds).reduce((a, b) => a + b, 0),
+    attempts: Object.values(today.attempts).reduce((a, b) => a + b, 0),
+  };
 }
 
 /** Serialized groups file. */
@@ -316,20 +389,26 @@ export async function cleanupExpiredTempAllowed(): Promise<void> {
       await browser.storage.local.set({ [TEMP_ALLOWED_KEY]: valid });
     }
 
-    // Drop stale usage entries (groups deleted or days rolled over).
-    const result = await browser.storage.local.get(USAGE_KEY);
-    const usage = (result[USAGE_KEY] as Record<string, GroupUsage>) || {};
-    const today = localDateString();
+    // Prune usage history to the retention window and drop entries for
+    // deleted groups.
+    const history = await readUsageHistory();
     const groups = await getGroups();
-    const validUsage: Record<string, GroupUsage> = {};
+    const validHistory: Record<string, DailyUsageMap> = {};
     for (const group of groups) {
-      const entry = usage[group.id];
-      if (entry && entry.date === today) validUsage[group.id] = entry;
+      const map = pruneDailyMap(history[group.id] ?? {});
+      if (Object.keys(map).length > 0) validHistory[group.id] = map;
     }
-    await browser.storage.local.set({ [USAGE_KEY]: validUsage });
+    await browser.storage.local.set({ [USAGE_KEY]: validHistory });
 
-    // Reset attempt counters — they're per-day stats.
-    await browser.storage.local.set({ [ATTEMPTS_KEY]: {} });
+    // Prune attempt history beyond the retention window.
+    const histResult = await browser.storage.local.get(ATTEMPTS_HISTORY_KEY);
+    const attemptsHistory = (histResult[ATTEMPTS_HISTORY_KEY] as Record<string, Record<string, number>>) || {};
+    const cutoff = localDateString(new Date(Date.now() - USAGE_RETENTION_DAYS * 86400000));
+    const validAttempts: Record<string, Record<string, number>> = {};
+    for (const [date, counts] of Object.entries(attemptsHistory)) {
+      if (date >= cutoff) validAttempts[date] = counts;
+    }
+    await browser.storage.local.set({ [ATTEMPTS_HISTORY_KEY]: validAttempts });
   } catch {
     // Storage unavailable; nothing to clean.
   }

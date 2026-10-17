@@ -4,6 +4,16 @@
 
 ### Features
 
+- **Real time tracking.** Usage now counts actual minutes browsed
+  (metered by a content-script heartbeat, only while the tab is visible),
+  not minutes granted. Leaving early stops the meter; unused granted
+  time no longer consumes the daily budget. Sessions are re-blocked
+  mid-browse when a group's budget is exhausted. History is kept for 30
+  days; old granted-minute data migrates to seconds.
+- **Stats view** (options sidebar): today's time on blocked sites and
+  block screens shown, per-group budget progress bars, and a 7-day
+  stacked minutes chart per group. The popup shows a compact today
+  summary. Factual numbers only — no streaks, points, or badges.
 - **Backup:** export groups to a JSON file and import a previously
   exported one (Security section). Import replaces all groups; passwords
   and usage are never included.

@@ -15,7 +15,9 @@ import {
   hashPassword,
   randomSalt,
   verifyPassword,
+  getStats,
   type BlockGroup,
+  type DayStats,
 } from "@/utils/storage";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -121,7 +123,7 @@ function App() {
 function Settings() {
   const [groups, setGroups] = useState<BlockGroup[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [view, setView] = useState<'home' | 'group' | 'security'>('home');
+  const [view, setView] = useState<'home' | 'stats' | 'group' | 'security'>('home');
   const [hasPassword, setHasPassword] = useState(false);
   const [newSites, setNewSites] = useState<Record<string, string>>({});
 
@@ -209,6 +211,16 @@ function Settings() {
             </button>
 
             <button
+              className={`w-full flex items-center gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
+                view === 'stats' ? 'bg-secondary' : 'hover:bg-muted/60'
+              }`}
+              onClick={() => setView('stats')}
+            >
+              <Timer className="h-4 w-4 text-muted-foreground" />
+              Stats
+            </button>
+
+            <button
               className={`w-full flex items-center justify-between gap-2 rounded-md px-3 py-2 text-sm transition-colors ${
                 view === 'security' ? 'bg-secondary' : 'hover:bg-muted/60'
               }`}
@@ -278,6 +290,8 @@ function Settings() {
                 }}
                 currentGroupCount={groups.length}
               />
+            ) : view === 'stats' ? (
+              <StatsPanel groups={groups} />
             ) : view === 'home' ? (
               <Landing onAddGroup={addGroup} groupCount={groups.length} />
             ) : selectedGroup ? (
@@ -302,6 +316,218 @@ function Settings() {
           </div>
         </div>
       </main>
+    </div>
+  );
+}
+
+const CHART_COLORS = [
+  "#7dd3fc",
+  "#c4b5fd",
+  "#86efac",
+  "#fca5a5",
+  "#fcd34d",
+  "#a5b4fc",
+  "#5eead4",
+  "#f9a8d4",
+];
+
+const colorForGroup = (index: number) =>
+  CHART_COLORS[index % CHART_COLORS.length];
+
+function formatMinutes(seconds: number): string {
+  const minutes = Math.round(seconds / 60);
+  if (minutes === 0) return "0 min";
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest === 0 ? `${hours}h` : `${hours}h ${rest}m`;
+}
+
+const dayLabel = (date: string) => {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString(undefined, {
+    weekday: "short",
+  });
+};
+
+function StatsPanel({ groups }: { groups: BlockGroup[] }) {
+  const [days, setDays] = useState<DayStats[] | null>(null);
+
+  const groupKey = groups.map((g) => g.id).join(",");
+  useEffect(() => {
+    getStats(groups).then(setDays);
+    // Refetch when the set of groups changes; content refreshes on view
+    // switch by remounting.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [groupKey]);
+
+  if (!days) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center text-sm text-muted-foreground">
+          Loading stats…
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const today = days[days.length - 1];
+  const todaySeconds = Object.values(today.seconds).reduce((a, b) => a + b, 0);
+  const todayAttempts = Object.values(today.attempts).reduce(
+    (a, b) => a + b,
+    0
+  );
+  const maxSeconds = Math.max(1, ...days.map((d) => Object.values(d.seconds).reduce((a, b) => a + b, 0)));
+  const hasAnyData = days.some(
+    (d) =>
+      Object.values(d.seconds).some((s) => s > 0) ||
+      Object.values(d.attempts).some((a) => a > 0)
+  );
+
+  if (!hasAnyData) {
+    return (
+      <Card>
+        <CardContent className="py-12 text-center text-sm text-muted-foreground">
+          Nothing to show yet. Stats appear as you browse blocked sites.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const budgeted = groups.filter((g) => g.dailyBudgetMinutes > 0);
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      {/* Today */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Today</CardTitle>
+          <CardDescription>
+            Actual time spent on blocked sites, counted while the tab was
+            visible. Closing the tab or switching away stops the meter.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid grid-cols-2 gap-4">
+          <div>
+            <p className="text-3xl font-semibold">{formatMinutes(todaySeconds)}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              on blocked sites
+            </p>
+          </div>
+          <div>
+            <p className="text-3xl font-semibold">{todayAttempts}</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              block screens shown
+            </p>
+          </div>
+        </CardContent>
+
+        {budgeted.length > 0 && (
+          <CardContent className="space-y-3 pt-0">
+            <Separator />
+            {budgeted.map((group) => {
+              const used = Math.round((today.seconds[group.id] || 0) / 60);
+              const limit = group.dailyBudgetMinutes;
+              const pct = Math.min(100, (used / limit) * 100);
+              return (
+                <div key={group.id} className="space-y-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <span>{group.name}</span>
+                    <span className="text-muted-foreground">
+                      {used} of {limit} min
+                    </span>
+                  </div>
+                  <div className="h-2 rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={`h-full rounded-full ${
+                        pct >= 100 ? "bg-destructive" : "bg-primary"
+                      }`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </CardContent>
+        )}
+      </Card>
+
+      {/* Last 7 days */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-lg">Last 7 days</CardTitle>
+          <CardDescription>Minutes per day, stacked by group.</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-end gap-1.5 h-36">
+            {days.map((day) => {
+              const total = Object.values(day.seconds).reduce(
+                (a, b) => a + b,
+                0
+              );
+              return (
+                <div
+                  key={day.date}
+                  className="flex-1 flex flex-col items-center h-full"
+                >
+                  <div className="w-full flex-1 flex flex-col justify-end">
+                    {total > 0 && (
+                      <div
+                        className="w-full flex flex-col-reverse overflow-hidden rounded-sm"
+                        style={{ height: `${(total / maxSeconds) * 100}%` }}
+                      >
+                        {groups.map((group, i) => {
+                          const sec = day.seconds[group.id] || 0;
+                          if (!sec) return null;
+                          return (
+                            <div
+                              key={group.id}
+                              style={{
+                                height: `${(sec / total) * 100}%`,
+                                background: colorForGroup(i),
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground mt-1">
+                    {dayLabel(day.date)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            {groups.map((group, i) => {
+              const weekSeconds = days.reduce(
+                (a, d) => a + (d.seconds[group.id] || 0),
+                0
+              );
+              const weekAttempts = days.reduce(
+                (a, d) => a + (d.attempts[group.id] || 0),
+                0
+              );
+              return (
+                <div
+                  key={group.id}
+                  className="flex items-center gap-2 text-xs text-muted-foreground"
+                >
+                  <span
+                    className="h-2.5 w-2.5 rounded-sm"
+                    style={{ background: colorForGroup(i) }}
+                  />
+                  <span className="text-foreground">{group.name}</span>
+                  {formatMinutes(weekSeconds)}
+                  {weekAttempts > 0 && ` · ${weekAttempts} blocks`}
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

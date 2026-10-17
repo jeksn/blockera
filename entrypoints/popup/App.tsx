@@ -3,14 +3,18 @@ import { Shield, Globe, Settings, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { getGroups, type BlockGroup } from "@/utils/storage";
+import { getGroups, getTodayTotals, type BlockGroup } from "@/utils/storage";
 import "@/assets/tailwind.css";
 
 function App() {
   const [groups, setGroups] = useState<BlockGroup[]>([]);
+  const [today, setToday] = useState<{ seconds: number; attempts: number } | null>(
+    null
+  );
 
   useEffect(() => {
     getGroups().then(setGroups);
+    getTodayTotals().then(setToday);
   }, []);
 
   const totalSites = groups.reduce((sum, g) => sum + g.sites.length, 0);
@@ -61,6 +65,17 @@ function App() {
             <p className="text-xs text-muted-foreground text-center py-2">
               No block groups yet — add one in settings
             </p>
+          )}
+
+          {today && (today.seconds > 0 || today.attempts > 0) && (
+            <div className="flex items-center justify-between px-3 py-2 rounded-md bg-muted/50 text-sm">
+              <span>
+                Today: {Math.round(today.seconds / 60)} min on blocked sites
+              </span>
+              <Badge variant="outline" className="text-xs shrink-0">
+                {today.attempts} blocks
+              </Badge>
+            </div>
           )}
 
           <p className="text-[11px] text-muted-foreground text-center">

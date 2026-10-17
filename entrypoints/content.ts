@@ -16,7 +16,7 @@ interface SiteState {
 
 interface TempAllowResponse {
   success: boolean;
-  grantedMinutes?: number;
+  grantedSeconds?: number;
   reason?: string;
 }
 
@@ -228,6 +228,7 @@ export default defineContentScript({
           (state.tempAllowedUntil - Date.now()) / 60000,
           state.tempAllowedUntil,
         );
+        startHeartbeat(hostname);
         return;
       }
       if (state.blocked) {
@@ -247,7 +248,66 @@ function stopTimerLoop() {
   window.removeEventListener('pagehide', stopTimerLoop);
 }
 
+const HEARTBEAT_SECONDS = 15;
+
+let heartbeatInterval: ReturnType<typeof setInterval> | undefined;
+
+function stopHeartbeat() {
+  if (heartbeatInterval !== undefined) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = undefined;
+  }
+  window.removeEventListener('pagehide', stopHeartbeat);
+}
+
+/**
+ * Meter actual (visible) time spent on the site against its group.
+ * Every tick reports the seconds accumulated while the tab was visible;
+ * if the group's budget is exhausted mid-session, the block screen
+ * comes back up.
+ */
+function startHeartbeat(site: string) {
+  stopHeartbeat();
+  let pendingSeconds = 0;
+
+  const tick = async () => {
+    if (document.visibilityState !== 'visible') return;
+    pendingSeconds += HEARTBEAT_SECONDS;
+    let response: { budgetExceeded?: boolean } | null = null;
+    try {
+      response = (await browser.runtime.sendMessage({
+        type: 'USAGE_TICK',
+        site,
+        seconds: pendingSeconds,
+      })) as { budgetExceeded?: boolean } | null;
+    } catch {
+      stopHeartbeat();
+      return;
+    }
+    pendingSeconds = 0;
+    if (response?.budgetExceeded) {
+      stopHeartbeat();
+      void browser.runtime
+        .sendMessage({
+          type: 'GET_SITE_STATE',
+          site: window.location.hostname.replace(/^www\./, ''),
+        })
+        .then((state) => {
+          const s = state as SiteState;
+          if (s?.blocked) showOverlay(s);
+        })
+        .catch(() => {
+          // Extension context unavailable.
+        });
+    }
+  };
+
+  window.addEventListener('pagehide', stopHeartbeat);
+  heartbeatInterval = setInterval(tick, HEARTBEAT_SECONDS * 1000);
+}
+
 function showOverlay(state: SiteState) {
+  stopHeartbeat();
   document.getElementById(OVERLAY_ID)?.remove();
 
   const hostname = window.location.hostname.replace(/^www\./, '');
@@ -360,9 +420,12 @@ function showOverlay(state: SiteState) {
             return;
           }
           overlay.remove();
-          if ((response.grantedMinutes ?? 0) > 0) {
-            startTimer(response.grantedMinutes!);
+          const granted = response.grantedSeconds ?? 0;
+          if (granted > 0) {
+            startTimer(granted / 60, Date.now() + granted * 1000);
           }
+          // Meter actual time on the page — including "just this once".
+          startHeartbeat(hostname);
         })();
       }
     });

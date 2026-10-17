@@ -4,9 +4,9 @@ import {
   findGroupForSite,
   isSiteTempAllowed,
   getTempAllowedSites,
-  getBudgetRemaining,
+  getBudgetRemainingSeconds,
   addTempAllowedSite,
-  addUsage,
+  addUsageSeconds,
   addBlockAttempt,
   isGroupActive,
   cleanupExpiredTempAllowed,
@@ -58,7 +58,7 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
   if (!isGroupActive(group)) return NOT_BLOCKED;
 
   if (!group.allowOverride) {
-    const attemptsToday = await addBlockAttempt(hostname);
+    const attemptsToday = await addBlockAttempt(hostname, group.id);
     return {
       blocked: true,
       groupName: group.name,
@@ -72,7 +72,9 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
     };
   }
 
-  const budgetRemaining = await getBudgetRemaining(group);
+  const remainingSeconds = await getBudgetRemainingSeconds(group);
+  const budgetRemaining =
+    remainingSeconds === null ? null : Math.ceil(remainingSeconds / 60);
   const tempAllowed = await isSiteTempAllowed(hostname);
   let tempAllowedUntil: number | undefined;
   if (tempAllowed) {
@@ -93,8 +95,8 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
     };
   }
 
-  const hardBlock = budgetRemaining !== null && budgetRemaining <= 0;
-  const attemptsToday = await addBlockAttempt(hostname);
+  const hardBlock = remainingSeconds !== null && remainingSeconds <= 0;
+  const attemptsToday = await addBlockAttempt(hostname, group.id);
 
   return {
     blocked: true,
@@ -129,7 +131,7 @@ export default defineBackground(() => {
         try {
           const group = await findGroupForSite(site);
           if (!group) {
-            sendResponse({ success: true, grantedMinutes: 0 });
+            sendResponse({ success: true, grantedSeconds: 0 });
             return;
           }
 
@@ -139,22 +141,47 @@ export default defineBackground(() => {
           }
 
           if (minutes > 0) {
-            const remaining = await getBudgetRemaining(group);
+            const remaining = await getBudgetRemainingSeconds(group);
             if (remaining !== null && remaining <= 0) {
               sendResponse({ success: false, reason: 'budget' });
               return;
             }
-            // Clamp to whatever budget is left (null = no limit).
-            const grant = remaining === null ? minutes : Math.min(minutes, remaining);
-            await addTempAllowedSite(site, grant);
-            await addUsage(group.id, grant);
-            sendResponse({ success: true, grantedMinutes: grant });
+            // Grant the requested minutes, clamped to any remaining
+            // budget. Actual usage is metered by the content heartbeat —
+            // unused granted time doesn't consume the budget.
+            const grantedSeconds =
+              remaining === null ? minutes * 60 : Math.min(minutes * 60, remaining);
+            await addTempAllowedSite(site, grantedSeconds / 60);
+            sendResponse({ success: true, grantedSeconds });
           } else {
-            // "Just this once": single page-view pass, nothing recorded.
-            sendResponse({ success: true, grantedMinutes: 0 });
+            // "Just this once": single page-view pass, nothing granted.
+            // Usage is still metered while the user stays on the page.
+            sendResponse({ success: true, grantedSeconds: 0 });
           }
         } catch {
           sendResponse({ success: false, reason: 'error' });
+        }
+      })();
+      return true;
+    }
+
+    if (message.type === 'USAGE_TICK') {
+      const { site, seconds } = message as { site: string; seconds: number };
+      (async () => {
+        try {
+          let budgetExceeded = false;
+          if (seconds > 0 && seconds <= 60) {
+            const group = await findGroupForSite(site);
+            if (group && group.allowOverride && isGroupActive(group)) {
+              const usedToday = await addUsageSeconds(group.id, seconds);
+              budgetExceeded =
+                group.dailyBudgetMinutes > 0 &&
+                usedToday >= group.dailyBudgetMinutes * 60;
+            }
+          }
+          sendResponse({ budgetExceeded });
+        } catch {
+          sendResponse({ budgetExceeded: false });
         }
       })();
       return true;

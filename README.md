@@ -26,6 +26,10 @@ subdomains) and a set of rules:
 - **Active hours** — optionally restrict blocking to a time window, e.g.
   22:00–07:00 (windows may cross midnight).
 
+Time on blocked sites is metered while the tab is actually visible and
+shown as plain stats in the settings (today, budget progress, last 7
+days) — no points, streaks, or badges.
+
 Groups can be exported to and imported from a JSON file in the Security
 section.
 
