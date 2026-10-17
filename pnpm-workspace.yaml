@@ -1,0 +1,6 @@
+packages:
+  # none; this is a single package
+
+allowBuilds:
+  esbuild: true
+  spawn-sync: true

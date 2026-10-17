@@ -1,123 +1,145 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import { browser } from 'wxt/browser';
-import { getBlockedSites, getTimeout, addTempAllowedSite, isSiteTempAllowed, getTempAllowedSites } from '@/utils/storage';
+import {
+  getBlockedSites,
+  getTimeout,
+  addTempAllowedSite,
+  isSiteTempAllowed,
+  getTempAllowedSites,
+  cleanupExpiredTempAllowed,
+} from '@/utils/storage';
+
+const hostnameFromUrl = (url: string) => {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return null;
+  }
+};
+
+const isBlockedSite = async (hostname: string) => {
+  const blockedSites = await getBlockedSites();
+  return blockedSites.some(
+    (site) => hostname === site || hostname.endsWith(`.${site}`),
+  );
+};
 
 export default defineBackground(() => {
-  // Listen for messages from content script
-  browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log('Background received message:', message.type, message);
-    
-    // Handle async messages by returning true and calling sendResponse
+  browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message.type === 'GET_TIMEOUT') {
-      getTimeout().then(timeout => {
-        console.log('GET_TIMEOUT returning:', timeout);
-        sendResponse(timeout);
-      });
+      getTimeout().then(sendResponse);
       return true; // Keep channel open for async
     }
-    
+
+    if (message.type === 'IS_BLOCKED') {
+      const hostname = String(message.site || '');
+      if (!hostname) {
+        sendResponse(false);
+        return false;
+      }
+      (async () => {
+        try {
+          const tempAllowed = await isSiteTempAllowed(hostname);
+          sendResponse(!tempAllowed && (await isBlockedSite(hostname)));
+        } catch {
+          sendResponse(false);
+        }
+      })();
+      return true;
+    }
+
     if (message.type === 'GET_TIMER_FOR_SITE') {
       const { site } = message;
-      getTempAllowedSites().then(sites => {
-        console.log('GET_TIMER_FOR_SITE for:', site);
-        console.log('All temp allowed sites:', sites);
-        const siteData = sites.find(s => s.site === site);
-        console.log('Found site data:', siteData);
-        
-        if (siteData && siteData.allowedUntil > Date.now()) {
-          console.log('Returning endTime:', siteData.allowedUntil);
-          sendResponse({ endTime: siteData.allowedUntil });
-        } else {
-          console.log('Site not found or expired');
-          sendResponse(null);
-        }
-      });
-      return true; // Keep channel open for async
+      getTempAllowedSites()
+        .then((sites) => {
+          const siteData = sites.find((s) => s.site === site);
+          if (siteData && siteData.allowedUntil > Date.now()) {
+            sendResponse({ endTime: siteData.allowedUntil });
+          } else {
+            sendResponse(null);
+          }
+        })
+        .catch(() => sendResponse(null));
+      return true;
     }
-    
+
     if (message.type === 'TEMP_ALLOW') {
       const { site, minutes } = message;
-      console.log('TEMP_ALLOW for', site, 'minutes:', minutes);
       if (minutes > 0) {
-        addTempAllowedSite(site, minutes).then(() => {
-          console.log(`Temporarily allowed ${site} for ${minutes} minutes`);
-          sendResponse({ success: true });
-        });
-      } else {
-        sendResponse({ success: true });
+        addTempAllowedSite(site, minutes)
+          .then(() => sendResponse({ success: true }))
+          .catch(() => sendResponse({ success: false }));
+        return true;
       }
-      return true; // Keep channel open for async
+      sendResponse({ success: true });
+      return false;
     }
-    
-    // Default: no async operation needed
+
     return false;
   });
 
-  // Helper function to inject content script and send message
-  const injectAndSendMessage = async (tabId: number, message: any, retries = 3) => {
+  // Inject the content script if it isn't running in the tab yet, then
+  // deliver the message.
+  const injectAndSendMessage = async (tabId: number, message: unknown, retries = 3) => {
     for (let i = 0; i < retries; i++) {
       try {
         await browser.tabs.sendMessage(tabId, message);
         return true;
-      } catch (error) {
+      } catch {
         if (i === retries - 1) {
-          console.log('Injecting content script for tab:', tabId);
           try {
             await browser.scripting.executeScript({
               target: { tabId },
-              files: ['/content-scripts/content.js']
+              files: ['/content-scripts/content.js'],
             });
-            // Wait a bit for the script to initialize
-            await new Promise(resolve => setTimeout(resolve, 200));
+            await new Promise((resolve) => setTimeout(resolve, 200));
             await browser.tabs.sendMessage(tabId, message);
             return true;
-          } catch (injectError) {
-            console.error('Failed to inject content script:', injectError);
+          } catch {
             return false;
           }
-        } else {
-          // Wait before retrying
-          await new Promise(resolve => setTimeout(resolve, 100));
         }
+        await new Promise((resolve) => setTimeout(resolve, 100));
       }
     }
     return false;
   };
 
-  // Listen for navigation to check against blocked sites
-  browser.webNavigation.onCompleted.addListener(async (details) => {
+  const handleNavigation = async (details: {
+    tabId: number;
+    url: string;
+    frameId: number;
+  }) => {
     if (details.frameId !== 0) return;
 
     try {
-      const blockedSites = await getBlockedSites();
-      if (blockedSites.length === 0) return;
+      const hostname = hostnameFromUrl(details.url);
+      if (!hostname) return;
 
-      const url = new URL(details.url);
-      const hostname = url.hostname.replace(/^www\./, '');
-      console.log('Navigation to:', hostname);
-
-      // Check if this site is temporarily allowed
-      const isTempAllowed = await isSiteTempAllowed(hostname);
-      
-      if (isTempAllowed) {
-        console.log(`${hostname} is temporarily allowed, showing timer`);
-        await injectAndSendMessage(details.tabId, { 
-          type: 'SHOW_TIMER', 
-          site: hostname 
+      const tempAllowed = await isSiteTempAllowed(hostname);
+      if (tempAllowed) {
+        await injectAndSendMessage(details.tabId, {
+          type: 'SHOW_TIMER',
+          site: hostname,
         });
         return;
       }
 
-      const isBlocked = blockedSites.some((site: string) =>
-        hostname === site || hostname.endsWith(`.${site}`)
-      );
-
-      if (isBlocked) {
-        console.log(`${hostname} is blocked, showing overlay`);
+      if (await isBlockedSite(hostname)) {
         await injectAndSendMessage(details.tabId, { type: 'BLOCK_SITE' });
       }
-    } catch (error) {
-      console.error('Error in webNavigation handler:', error);
+    } catch {
+      // Navigation raced or the tab is gone; the content script's
+      // self-check on load covers missed events.
     }
-  });
+  };
+
+  // onCompleted covers full page loads; onHistoryStateUpdated covers SPA
+  // route changes (pushState/replaceState), which never trigger onCompleted.
+  browser.webNavigation.onCompleted.addListener(handleNavigation);
+  browser.webNavigation.onHistoryStateUpdated.addListener(handleNavigation);
+
+  // Purge expired temporary allowances when the browser or extension starts.
+  browser.runtime.onStartup.addListener(cleanupExpiredTempAllowed);
+  browser.runtime.onInstalled.addListener(cleanupExpiredTempAllowed);
 });

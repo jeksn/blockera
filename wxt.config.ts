@@ -5,7 +5,10 @@ export default defineConfig({
   manifest: {
     name: 'Blockera',
     description: 'Block distracting sites with a dismissible blur overlay',
-    permissions: ['storage', 'webNavigation', 'scripting', 'tabs'],
+    action: {
+      default_title: 'Blockera',
+    },
+    permissions: ['storage', 'webNavigation', 'scripting'],
     host_permissions: ['<all_urls>'],
     icons: {
       16: 'cuboid.png',
