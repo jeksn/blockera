@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Shield, Globe, Settings } from "lucide-react";
+import { Shield, Globe, Settings, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -44,7 +44,11 @@ function App() {
                   className="flex items-center justify-between p-2 rounded-md bg-muted/50"
                 >
                   <div className="flex items-center gap-2 min-w-0">
-                    <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    {group.allowOverride ? (
+                      <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    ) : (
+                      <Lock className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    )}
                     <span className="text-sm truncate">{group.name}</span>
                   </div>
                   <Badge variant="secondary" className="text-xs shrink-0">

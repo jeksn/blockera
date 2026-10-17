@@ -11,8 +11,11 @@ Built with [WXT](https://wxt.dev) + React + TypeScript.
 ## Block groups
 
 Each group holds a list of sites (a site matches its domain and all
-subdomains) and two rules:
+subdomains) and a set of rules:
 
+- **Override** — "Allow temporary access" enables the rules below; "Always
+  block" makes the group's sites hard-blocked with no way to dismiss the
+  overlay (for adult sites and other no-go sites).
 - **Access per dismiss** — how long a "Let me in" click unblocks the site
   (just this once, or 5 / 15 / 30 / 60 minutes).
 - **Daily limit** — optionally cap total allowed time per day (e.g.

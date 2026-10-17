@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Trash2, Plus, X, Shield, Globe, Layers, Clock, Timer } from "lucide-react";
+import { Trash2, Plus, X, Shield, Globe, Layers, Clock, Timer, Ban } from "lucide-react";
 import "@/assets/tailwind.css";
 
 const allowLabels: Record<number, string> = {
@@ -111,10 +111,11 @@ function App() {
                     value={group.name}
                     onChange={(e) => updateGroup(group.id, { name: e.target.value })}
                     placeholder="Group name"
-                    className="text-lg font-semibold border-transparent bg-transparent px-0 focus-visible:ring-0 h-8"
+                    className="text-lg font-semibold h-10 max-w-xs"
                   />
                   <CardDescription className="mt-1">
                     {group.sites.length} {group.sites.length === 1 ? "site" : "sites"}
+                    {!group.allowOverride && " · always blocked"}
                   </CardDescription>
                 </div>
                 <Button
@@ -185,8 +186,43 @@ function App() {
 
               <Separator />
 
-              {/* Rules */}
-              <div className="grid gap-6 sm:grid-cols-2">
+              {/* Override */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <Ban className="h-4 w-4 text-muted-foreground" />
+                  Override
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Always-block groups show the block screen with no way to
+                  dismiss it — use these for sites you never want to talk
+                  yourself into.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    size="sm"
+                    variant={group.allowOverride ? "default" : "outline"}
+                    onClick={() => updateGroup(group.id, { allowOverride: true })}
+                    className="text-xs"
+                  >
+                    Allow temporary access
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant={!group.allowOverride ? "default" : "outline"}
+                    onClick={() => updateGroup(group.id, { allowOverride: false })}
+                    className="text-xs"
+                  >
+                    Always block
+                  </Button>
+                </div>
+              </div>
+
+              {group.allowOverride ? (
+                <>
+                  <Separator />
+
+                  {/* Rules */}
+                  <div className="grid gap-6 sm:grid-cols-2">
                 <div className="space-y-2">
                   <div className="flex items-center gap-2 text-sm font-medium">
                     <Clock className="h-4 w-4 text-muted-foreground" />
@@ -235,7 +271,14 @@ function App() {
                     ))}
                   </div>
                 </div>
-              </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Sites in this group are always blocked. Access and daily
+                  limit rules don't apply.
+                </p>
+              )}
             </CardContent>
           </Card>
         ))}

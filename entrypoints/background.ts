@@ -17,8 +17,10 @@ export interface SiteState {
   /** Minutes offered on the overlay; 0 = just this once. */
   allowPresets: number[];
   defaultAllow: number;
-  /** Budget exhausted: overlay shows no way out until midnight. */
+  /** No way past the overlay until midnight (budget) or ever (strict). */
   hardBlock: boolean;
+  /** Why the site is hard-blocked. */
+  hardBlockReason?: 'strict' | 'budget';
   /** Minutes of budget left today; null = no limit configured. */
   budgetRemaining: number | null;
   /** Set when the site is currently temp-allowed. */
@@ -43,7 +45,19 @@ const NOT_BLOCKED: SiteState = {
 
 const getSiteState = async (hostname: string): Promise<SiteState> => {
   const group = await findGroupForSite(hostname);
-  if (!group) return { blocked: false, allowPresets: [], defaultAllow: 0, hardBlock: false, budgetRemaining: null };
+  if (!group) return NOT_BLOCKED;
+
+  if (!group.allowOverride) {
+    return {
+      blocked: true,
+      groupName: group.name,
+      allowPresets: [],
+      defaultAllow: 0,
+      hardBlock: true,
+      hardBlockReason: 'strict',
+      budgetRemaining: null,
+    };
+  }
 
   const budgetRemaining = await getBudgetRemaining(group);
   const tempAllowed = await isSiteTempAllowed(hostname);
@@ -61,6 +75,7 @@ const getSiteState = async (hostname: string): Promise<SiteState> => {
     allowPresets: [...ALLOW_PRESETS],
     defaultAllow: group.allowMinutes,
     hardBlock,
+    hardBlockReason: hardBlock ? 'budget' : undefined,
     budgetRemaining,
     tempAllowedUntil,
   };
@@ -87,6 +102,11 @@ export default defineBackground(() => {
           const group = await findGroupForSite(site);
           if (!group) {
             sendResponse({ success: true, grantedMinutes: 0 });
+            return;
+          }
+
+          if (!group.allowOverride) {
+            sendResponse({ success: false, reason: 'strict' });
             return;
           }
 

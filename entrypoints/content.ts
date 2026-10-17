@@ -7,6 +7,7 @@ interface SiteState {
   allowPresets: number[];
   defaultAllow: number;
   hardBlock: boolean;
+  hardBlockReason?: 'strict' | 'budget';
   budgetRemaining: number | null;
   tempAllowedUntil?: number;
 }
@@ -247,7 +248,9 @@ function showOverlay(state: SiteState) {
   overlay.id = OVERLAY_ID;
 
   const description = state.hardBlock
-    ? `You've used your daily limit for ${state.groupName ?? 'this site'}.`
+    ? state.hardBlockReason === 'strict'
+      ? 'This site is blocked.'
+      : `You've used your daily limit for ${state.groupName ?? 'this site'}.`
     : 'This site is on your block list.';
 
   let budgetInfo = '';
@@ -283,9 +286,10 @@ function showOverlay(state: SiteState) {
       ${budgetInfo}
     `;
 
-  const hardBlockFooter = state.hardBlock
-    ? '<p class="blockera-info">It will unlock at midnight.</p>'
-    : '';
+  const hardBlockFooter =
+    state.hardBlock && state.hardBlockReason === 'budget'
+      ? '<p class="blockera-info">It will unlock at midnight.</p>'
+      : '';
 
   overlay.innerHTML = `
     <div class="blockera-content">
@@ -331,9 +335,14 @@ function showOverlay(state: SiteState) {
             return; // Extension context unavailable; keep the overlay up.
           }
           if (!response?.success) {
-            // Budget ran out between render and click (or clamped to zero):
-            // fall back to the hard-block overlay.
-            showOverlay({ ...state, hardBlock: true, budgetRemaining: 0 });
+            // Budget ran out between render and click (or the group is
+            // strict): fall back to the hard-block overlay.
+            showOverlay({
+              ...state,
+              hardBlock: true,
+              hardBlockReason: response?.reason === 'strict' ? 'strict' : 'budget',
+              budgetRemaining: 0,
+            });
             return;
           }
           overlay.remove();

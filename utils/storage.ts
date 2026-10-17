@@ -20,6 +20,11 @@ export interface BlockGroup {
   allowMinutes: number;
   /** Total grantable minutes per day. 0 = no limit. */
   dailyBudgetMinutes: number;
+  /**
+   * When false, sites in this group are always blocked with no way to
+   * dismiss the overlay (for sites you never want to talk yourself into).
+   */
+  allowOverride: boolean;
 }
 
 export interface TempAllowedSite {
@@ -63,7 +68,10 @@ export async function getGroups(): Promise<BlockGroup[]> {
   const result = await browser.storage.sync.get(GROUPS_KEY);
   const groups = result[GROUPS_KEY] as BlockGroup[] | undefined;
 
-  if (Array.isArray(groups)) return groups;
+  if (Array.isArray(groups)) {
+    // Normalize groups stored before a field was introduced.
+    return groups.map((g) => ({ ...g, allowOverride: g.allowOverride ?? true }));
+  }
 
   // Migrate legacy flat block list (plus its timeout setting) into a
   // single default group.
@@ -81,6 +89,7 @@ export async function getGroups(): Promise<BlockGroup[]> {
       sites,
       allowMinutes,
       dailyBudgetMinutes: 0,
+      allowOverride: true,
     },
   ];
   await browser.storage.sync.set({ [GROUPS_KEY]: migrated });
@@ -195,5 +204,6 @@ export function createGroup(name: string): BlockGroup {
     sites: [],
     allowMinutes: 0,
     dailyBudgetMinutes: 0,
+    allowOverride: true,
   };
 }
